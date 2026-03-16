@@ -30,6 +30,7 @@ tableau:
 
 epics:
   hyper_filename: "EPICS.hyper"
+  acrp_hyper_filename: "EPICS_ACRP.hyper"
   cache_filename: "epics_history_cache"
   key_column: "EPIC_KEY"
   sql_history_full: "EpicHistory.sql"

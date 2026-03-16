@@ -97,6 +97,60 @@ def print_dataframe_summary(df: pd.DataFrame, label: str) -> None:
     console.print()
 
 
+def print_polars_summary(df, label: str) -> None:
+    import polars as pl
+
+    height = df.height
+    width = df.width
+
+    table = Table(
+        title=f"[bold]{label}[/]  [dim]({height:,} rows x {width} cols)[/]",
+        box=box.ROUNDED,
+        header_style="bold cyan",
+        border_style="dim",
+        show_lines=False,
+    )
+
+    table.add_column("Column", style="white", min_width=20)
+    table.add_column("Dtype", style="yellow")
+    table.add_column("Nulls", justify="right", style="dim")
+    table.add_column("Null %", justify="right")
+
+    total_nulls = 0
+    for col in df.columns:
+        null_count = df[col].null_count()
+        total_nulls += null_count
+        null_pct = (null_count / height * 100) if height > 0 else 0.0
+
+        if null_pct > 10:
+            pct_style = "red bold"
+        elif null_pct > 5:
+            pct_style = "yellow"
+        elif null_pct > 0:
+            pct_style = "dim"
+        else:
+            pct_style = "green"
+
+        table.add_row(
+            col,
+            str(df[col].dtype),
+            f"{null_count:,}",
+            Text(f"{null_pct:.1f}%", style=pct_style),
+        )
+
+    total_cells = height * width
+    total_pct = (total_nulls / total_cells * 100) if total_cells > 0 else 0.0
+
+    table.add_section()
+    table.add_row(
+        "[bold]Total[/]", "", f"{total_nulls:,}",
+        Text(f"{total_pct:.1f}%", style="bold"),
+    )
+
+    console.print(table)
+    console.print()
+
+
 def print_info(message: str) -> None:
     console.print(f"  [cyan]>[/] {message}")
 
