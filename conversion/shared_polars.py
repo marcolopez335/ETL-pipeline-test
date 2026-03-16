@@ -49,6 +49,10 @@ def run_query(sql_filename: str, database: str = "default", verbose: bool = True
     try:
         pdf = conn.execute_query(query, verbose=verbose)
         df = pl.from_pandas(pdf)
+        # Cast any Null-typed columns (all-null from pandas) to Utf8 early
+        null_cols = [c for c in df.columns if df[c].dtype == pl.Null]
+        if null_cols:
+            df = df.with_columns([pl.col(c).cast(pl.Utf8) for c in null_cols])
         logger.info(f"Query returned {df.height} rows")
     except Exception as exc:
         logger.error(f"Failed to execute {sql_filename}: {exc}")
@@ -169,14 +173,22 @@ def write_history_cache(df: pl.DataFrame, cache_path: Path) -> None:
     logger.info(f"Wrote {df.height} rows to cache: {cache_path}")
 
 
+def _safe_dtype(dtype: pl.DataType) -> pl.DataType:
+    """Return Utf8 if dtype is Null, otherwise return as-is."""
+    return pl.Utf8 if dtype == pl.Null else dtype
+
+
 def _align_schemas(df1: pl.DataFrame, df2: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Align two DataFrames to the same columns and types before concat."""
     all_cols = dict.fromkeys(df1.columns + df2.columns)
 
     for col in all_cols:
         if col in df1.columns and col in df2.columns:
-            # If types differ, cast the Null-typed one to the other's type
-            if df1[col].dtype != df2[col].dtype:
+            if df1[col].dtype == pl.Null and df2[col].dtype == pl.Null:
+                # Both Null — cast both to Utf8 so downstream doesn't choke
+                df1 = df1.with_columns(pl.col(col).cast(pl.Utf8))
+                df2 = df2.with_columns(pl.col(col).cast(pl.Utf8))
+            elif df1[col].dtype != df2[col].dtype:
                 if df1[col].dtype == pl.Null:
                     df1 = df1.with_columns(pl.col(col).cast(df2[col].dtype))
                 elif df2[col].dtype == pl.Null:
@@ -191,9 +203,9 @@ def _align_schemas(df1: pl.DataFrame, df2: pl.DataFrame) -> tuple[pl.DataFrame, 
                         df1 = df1.with_columns(pl.col(col).cast(pl.Utf8, strict=False))
                         df2 = df2.with_columns(pl.col(col).cast(pl.Utf8, strict=False))
         elif col not in df1.columns:
-            df1 = df1.with_columns(pl.lit(None).cast(df2[col].dtype).alias(col))
+            df1 = df1.with_columns(pl.lit(None).cast(_safe_dtype(df2[col].dtype)).alias(col))
         else:
-            df2 = df2.with_columns(pl.lit(None).cast(df1[col].dtype).alias(col))
+            df2 = df2.with_columns(pl.lit(None).cast(_safe_dtype(df1[col].dtype)).alias(col))
 
     # Ensure same column order
     df2 = df2.select(df1.columns)
@@ -288,7 +300,7 @@ def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: di
     null_cols = [col for col in df.columns if df[col].dtype == pl.Null]
     if null_cols:
         df = df.with_columns([pl.col(c).cast(pl.Utf8) for c in null_cols])
-    pdf = df.to_pandas()
+    pdf = df.to_pandas(use_pyarrow_extension_types=False)
     pt.frame_to_hyper(pdf, database=hyper_path, table_mode="w", table=table_name)
     logger.info(f"Exported {df.height} rows to {hyper_path} (table: {table_name})")
 
