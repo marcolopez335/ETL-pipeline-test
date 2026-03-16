@@ -45,15 +45,15 @@ def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
     )
 
     # Summarize: min and max target release per feature number
-    summary = split.group_by("FEATURE_NUMBER").agg([
+    summary = split.group_by("FEATURE_KEY").agg([
         pl.col("FEATURE_FIX_VERSION").min().alias("MIN_TARGET_RELEASE"),
         pl.col("FEATURE_FIX_VERSION").max().alias("MAX_TARGET_RELEASE"),
     ])
 
     # Inner join back to the split data
-    result = split.join(summary, on="FEATURE_NUMBER", how="inner")
+    result = split.join(summary, on="FEATURE_KEY", how="inner")
 
-    logger.info(f"ACRP result: {result.height} rows, {result['FEATURE_NUMBER'].n_unique()} features")
+    logger.info(f"ACRP result: {result.height} rows, {result['FEATURE_KEY'].n_unique()} features")
     return result
 
 

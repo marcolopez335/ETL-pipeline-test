@@ -54,7 +54,7 @@ def build_acrp(df: pd.DataFrame) -> pd.DataFrame:
 
     # Summarize: min and max target release per feature number
     summary = (
-        split.groupby("FEATURE_NUMBER", as_index=False)
+        split.groupby("FEATURE_KEY", as_index=False)
         .agg(
             MIN_TARGET_RELEASE=("FEATURE_FIX_VERSION", "min"),
             MAX_TARGET_RELEASE=("FEATURE_FIX_VERSION", "max"),
@@ -62,9 +62,9 @@ def build_acrp(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # Inner join back to the split data
-    result = split.merge(summary, on="FEATURE_NUMBER", how="inner")
+    result = split.merge(summary, on="FEATURE_KEY", how="inner")
 
-    logger.info(f"ACRP result: {len(result)} rows, {result['FEATURE_NUMBER'].nunique()} features")
+    logger.info(f"ACRP result: {len(result)} rows, {result['FEATURE_KEY'].nunique()} features")
     return result
 
 
