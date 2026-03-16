@@ -284,6 +284,10 @@ def union_data(df_summary: pl.DataFrame, df_history: pl.DataFrame) -> pl.DataFra
 def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: dict) -> None:
     hyper_path.parent.mkdir(parents=True, exist_ok=True)
     backup_file(hyper_path, config)
+    # Cast Null-typed columns to String so pantab doesn't choke on Arrow na type
+    null_cols = [col for col in df.columns if df[col].dtype == pl.Null]
+    if null_cols:
+        df = df.with_columns([pl.col(c).cast(pl.Utf8) for c in null_cols])
     pdf = df.to_pandas()
     pt.frame_to_hyper(pdf, database=hyper_path, table_mode="w", table=table_name)
     logger.info(f"Exported {df.height} rows to {hyper_path} (table: {table_name})")
