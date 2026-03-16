@@ -8,7 +8,7 @@ from conversion.shared import (
     export_hyper, load_config, log_dataframe_summary, publish_hyper,
 )
 from conversion.console import (
-    print_header, step_spinner, print_pipeline_complete,
+    print_header, step_spinner, print_info, print_pipeline_complete,
 )
 
 SCRIPT_DIR = Path(__file__).parent
@@ -20,6 +20,94 @@ setup_logging(
     console_level=INFO,
 )
 logger = get_logger(__name__)
+
+SPRINT_PARTITION = ["SNAPSHOT_DATE", "PROGRAM_INCREMENT"]
+
+
+def _sprint_sort_key() -> pl.Expr:
+    """Parse sprint version (e.g. '26.1.2' or '26.1.IP') into a sortable integer.
+
+    Key = year * 10000 + pi * 100 + sprint, where IP = 99.
+    Example: '26.1.2' -> 260102, '26.1.IP' -> 260199
+    """
+    version = pl.col("SPRINT_VERSION").str.split(".")
+    major = version.list.get(0).cast(pl.Int64, strict=False).fill_null(0)
+    minor = version.list.get(1).cast(pl.Int64, strict=False).fill_null(0)
+    patch_str = version.list.get(2)
+    patch = (
+        pl.when(patch_str == "IP")
+        .then(pl.lit(99))
+        .otherwise(patch_str.cast(pl.Int64, strict=False).fill_null(0))
+    )
+    return major * 10000 + minor * 100 + patch
+
+
+def _sort_key_to_version(col_name: str, alias: str) -> pl.Expr:
+    """Convert a numeric sprint sort key back to a version string."""
+    key = pl.col(col_name)
+    major = (key // 10000).cast(pl.Utf8)
+    minor = ((key % 10000) // 100).cast(pl.Utf8)
+    patch_num = key % 100
+    patch = (
+        pl.when(patch_num == 99)
+        .then(pl.lit("IP"))
+        .otherwise(patch_num.cast(pl.Utf8))
+    )
+    return (major + pl.lit(".") + minor + pl.lit(".") + patch).alias(alias)
+
+
+def _compute_sprint_range(df: pl.DataFrame) -> pl.DataFrame:
+    """Extract sprint version from SPRINT_NAME and compute min/max per partition."""
+    # Extract version pattern from end of SPRINT_NAME (e.g. "26.1.2" or "26.1.IP")
+    df = df.with_columns(
+        pl.col("SPRINT_NAME")
+        .cast(pl.Utf8)
+        .str.extract(r"(\d{2,4}\.\d+\.(?:\d+|IP))\s*$")
+        .alias("SPRINT_VERSION")
+    )
+
+    # Build sortable key for proper version comparison
+    df = df.with_columns(_sprint_sort_key().alias("_sprint_sort_key"))
+
+    # Min/max per SNAPSHOT_DATE + PROGRAM_INCREMENT
+    df = df.with_columns([
+        pl.col("_sprint_sort_key").min().over(SPRINT_PARTITION).alias("_min_key"),
+        pl.col("_sprint_sort_key").max().over(SPRINT_PARTITION).alias("_max_key"),
+    ])
+
+    # Reconstruct version strings from keys
+    df = df.with_columns([
+        _sort_key_to_version("_min_key", "MIN_SPRINT"),
+        _sort_key_to_version("_max_key", "MAX_SPRINT"),
+    ])
+
+    # Drop temp columns
+    df = df.drop(["_sprint_sort_key", "_min_key", "_max_key"])
+
+    logger.info(
+        f"Sprint range: {df['MIN_SPRINT'][0]} - {df['MAX_SPRINT'][0]} "
+        f"({df.select(pl.col('SPRINT_VERSION').n_unique()).item()} unique sprints)"
+    )
+
+    return df
+
+
+def data_functions(df: pl.DataFrame) -> pl.DataFrame:
+    """Apply all post-union transformations."""
+    from datetime import datetime
+
+    # LAST_UPDATED timestamp
+    now = datetime.now()
+    local_tz = now.astimezone().tzname()
+    logger.info(f"LAST_UPDATED set to {now} (timezone: {local_tz})")
+
+    df = df.with_columns(pl.lit(now).alias("LAST_UPDATED"))
+
+    # Sprint range (MIN_SPRINT / MAX_SPRINT per snapshot + PI)
+    df = _compute_sprint_range(df)
+
+    return df
+
 
 def fetch_summary_full(config: dict) -> pl.DataFrame:
     cfg = config["epics"]
@@ -96,8 +184,9 @@ def run(config: dict, publish: bool = False):
         df_history = clean_dtypes(df_history, EXPECTED_DTYPES_EPICS)
     log_dataframe_summary(df_history, "Epics History")
 
-    with step_spinner(3, total, "Unioning data"):
+    with step_spinner(3, total, "Unioning & transforming"):
         df = union_data(df_summary, df_history)
+        df = data_functions(df)
 
     log_dataframe_summary(df, "Epics Final")
 
