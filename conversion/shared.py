@@ -157,14 +157,14 @@ def backup_file(file_path: Path, config: dict) -> None:
         logger.info(f"Removed old backup: {old.name}")
 
 
-def read_history_cache(cache_path: Path) -> pl.DataFrame:
+def read_history_cache(cache_path: Path) -> pl.LazyFrame | None:
     if not cache_path.exists():
         logger.info(f"No cache found at {cache_path}")
-        return pl.DataFrame()
+        return None
 
-    df = pl.read_parquet(cache_path)
-    logger.info(f"Read {df.height} rows from cache")
-    return df
+    lf = pl.scan_parquet(cache_path)
+    logger.info(f"Lazy-scanning cache: {cache_path}")
+    return lf
 
 
 def write_history_cache(df: pl.DataFrame, cache_path: Path) -> None:
@@ -226,11 +226,12 @@ def fetch_history(sql_filename: str, key_col: str) -> pl.DataFrame:
 
 
 def update_history_cache_with_recent(
-    cached: pl.DataFrame, recent: pl.DataFrame, key_col: str
+    cached_lf: pl.LazyFrame, recent: pl.DataFrame, key_col: str
 ) -> pl.DataFrame:
     KEY_COLS = [key_col, "SNAPSHOT_DATE"]
 
-    cached = cached.with_columns([
+    # Cast types lazily on the cached data — only reads what's needed
+    cached_lf = cached_lf.with_columns([
         pl.col("SNAPSHOT_DATE").cast(pl.Datetime, strict=False),
         pl.col(key_col).cast(pl.Utf8, strict=False),
     ])
@@ -239,15 +240,13 @@ def update_history_cache_with_recent(
         pl.col(key_col).cast(pl.Utf8, strict=False),
     ])
 
-    if cached.height == 0:
-        return recent.drop_nulls(subset=KEY_COLS).unique(subset=KEY_COLS, keep="last")
+    # Anti-join lazily — Polars only scans the parquet rows it needs
+    recent_keys = recent.lazy().select(KEY_COLS).unique()
+    cached_keep_lf = cached_lf.join(recent_keys, on=KEY_COLS, how="anti")
 
-    # Native anti-join
-    cached_keep = cached.join(
-        recent.select(KEY_COLS).unique(),
-        on=KEY_COLS,
-        how="anti",
-    )
+    # Collect the filtered cache (much smaller than full cache)
+    cached_keep = cached_keep_lf.collect()
+    cached_count = cached_lf.select(pl.len()).collect().item()
 
     # Align schemas before concat — cached from parquet may differ from fresh query
     cached_keep, recent = _align_schemas(cached_keep, recent)
@@ -256,12 +255,12 @@ def update_history_cache_with_recent(
     combined = combined.drop_nulls(subset=KEY_COLS)
     combined = combined.unique(subset=KEY_COLS, keep="last")
 
-    if combined.height < 0.98 * cached.height:
+    if combined.height < 0.98 * cached_count:
         raise RuntimeError(
-            f"Cache shrank unexpectedly: {combined.height} rows vs {cached.height} prior"
+            f"Cache shrank unexpectedly: {combined.height} rows vs {cached_count} prior"
         )
 
-    logger.info(f"Cache updated: {cached.height} -> {combined.height} rows")
+    logger.info(f"Cache updated: {cached_count} -> {combined.height} rows")
     return combined
 
 
@@ -275,13 +274,13 @@ def build_and_cache_history(sql_full: str, key_col: str, cache_path: Path) -> pl
 def update_history(
     sql_full: str, sql_recent: str, key_col: str, cache_path: Path
 ) -> pl.DataFrame:
-    cached = read_history_cache(cache_path)
+    cached_lf = read_history_cache(cache_path)
 
-    if cached.height == 0:
+    if cached_lf is None:
         return build_and_cache_history(sql_full, key_col, cache_path)
 
     recent = fetch_history(sql_recent, key_col)
-    updated = update_history_cache_with_recent(cached, recent, key_col)
+    updated = update_history_cache_with_recent(cached_lf, recent, key_col)
 
     write_history_cache(updated, cache_path)
     return updated
