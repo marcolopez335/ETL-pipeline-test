@@ -21,21 +21,19 @@ setup_logging(
 )
 logger = get_logger(__name__)
 
-ACRP_TYPES = ["Feature", "Sub-capability"]
-
-
 def fetch_summary_full(config: dict) -> pl.DataFrame:
     cfg = config["epics"]
     return run_query(cfg["sql_summary"], database=config["database"]["name"])
 
 
 def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
-    # Filter: null snapshot date AND type is Feature or Sub-capability
+    # Filter: null snapshot date AND row is a feature or subcapability level
     filtered = df.filter(
-        pl.col("SNAPSHOT_DATE").is_null() & pl.col("FEATURE_TYPE").is_in(ACRP_TYPES)
+        pl.col("SNAPSHOT_DATE").is_null()
+        & (pl.col("FEATURE_KEY").is_not_null() | pl.col("SUBCAPABILITY_KEY").is_not_null())
     )
 
-    logger.info(f"ACRP filter: {filtered.height} rows from {df.height} (null snapshot, Feature/Sub-capability)")
+    logger.info(f"ACRP filter: {filtered.height} rows from {df.height} (null snapshot, feature/subcap)")
 
     # Split FEATURE_FIX_VERSION on comma into separate rows
     split = filtered.with_columns(

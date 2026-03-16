@@ -21,9 +21,6 @@ setup_logging(
 )
 logger = get_logger(__name__)
 
-ACRP_TYPES = {"Feature", "Sub-capability"}
-
-
 def fetch_summary_full(config: dict) -> pd.DataFrame:
     cfg = config["epics"]
     df = run_query(cfg["sql_summary"], database=config["database"]["name"])
@@ -39,11 +36,14 @@ def fetch_summary_full(config: dict) -> pd.DataFrame:
 
 
 def build_acrp(df: pd.DataFrame) -> pd.DataFrame:
-    # Filter: null snapshot date AND type is Feature or Sub-capability
-    mask = df["SNAPSHOT_DATE"].isna() & df["FEATURE_TYPE"].isin(ACRP_TYPES)
+    # Filter: null snapshot date AND row is a feature or subcapability level
+    mask = (
+        df["SNAPSHOT_DATE"].isna()
+        & (df["FEATURE_KEY"].notna() | df["SUBCAPABILITY_KEY"].notna())
+    )
     filtered = df.loc[mask].copy()
 
-    logger.info(f"ACRP filter: {len(filtered)} rows from {len(df)} (null snapshot, Feature/Sub-capability)")
+    logger.info(f"ACRP filter: {len(filtered)} rows from {len(df)} (null snapshot, feature/subcap)")
 
     # Split FEATURE_FIX_VERSION on comma into separate rows
     filtered["FEATURE_FIX_VERSION"] = filtered["FEATURE_FIX_VERSION"].astype(str)
