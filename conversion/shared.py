@@ -300,7 +300,8 @@ def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: di
     null_cols = [col for col in df.columns if df[col].dtype == pl.Null]
     if null_cols:
         df = df.with_columns([pl.col(c).cast(pl.Utf8) for c in null_cols])
-    pdf = df.to_pandas()
+    # Convert to Arrow table first, then to pandas — avoids pyarrow-backed dtypes
+    pdf = df.to_arrow().to_pandas()
     pt.frame_to_hyper(pdf, database=hyper_path, table_mode="w", table=table_name)
     logger.info(f"Exported {df.height} rows to {hyper_path} (table: {table_name})")
 
