@@ -7,6 +7,9 @@ import yaml
 from pathlib import Path
 from common.database.tibco import TibcoConnection
 from common.logging import get_logger
+from common.tableau.publish import (
+    TableauPublishConfig, publish_hyper_to_tableau, TABLEAU_SERVICE_NAME,
+)
 from conversion.console import (
     print_dataframe_summary, print_info, print_success, print_error,
 )
@@ -233,3 +236,30 @@ def export_hyper(df: pd.DataFrame, hyper_path: Path, table_name: str, config: di
     backup_file(hyper_path, config)
     pt.frame_to_hyper(df, database=hyper_path, table_mode="w", table=table_name)
     logger.info(f"Exported {len(df)} rows to {hyper_path} (table: {table_name})")
+
+
+def publish_hyper(hyper_path: Path, table_name: str, config: dict) -> None:
+    tab_cfg = config["tableau"]
+
+    publish_config = TableauPublishConfig(
+        server_url=tab_cfg["server_url"],
+        site_id=tab_cfg["site_id"],
+        project_name=tab_cfg["project_name"],
+        overwrite=tab_cfg.get("overwrite", True),
+    )
+
+    logger.info(f"Publishing {hyper_path.name} to Tableau ({tab_cfg['server_url']})")
+    print_info(f"Publishing [bold]{hyper_path.name}[/] to Tableau")
+
+    try:
+        publish_hyper_to_tableau(
+            hyper_path=hyper_path,
+            table_name=table_name,
+            config=publish_config,
+        )
+        logger.info(f"Published {hyper_path.name} to project: {tab_cfg['project_name']}")
+        print_success(f"Published to [bold]{tab_cfg['project_name']}[/]")
+    except Exception as exc:
+        logger.error(f"Publish failed: {exc}")
+        print_error(f"Publish failed: {exc}")
+        raise

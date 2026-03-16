@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--epics", action="store_true", help="Run epics pipeline only")
     parser.add_argument("--update-cache", action="store_true", help="Update history caches only (no hyper export)")
     parser.add_argument("--test", action="store_true", help="Test the database connection")
+    parser.add_argument("--publish", action="store_true", help="Publish hyper files to Tableau after export")
     args = parser.parse_args()
 
     config = load_config()
@@ -53,10 +54,10 @@ def main():
         return
 
     if run_all or args.stories:
-        stories.run(config)
+        stories.run(config, publish=args.publish)
 
     if run_all or args.epics:
-        epics.run(config)
+        epics.run(config, publish=args.publish)
 
     console.rule("[bold green]Done[/]", style="green")
     console.print()

@@ -6,7 +6,7 @@ from common.logging import get_logger, setup_logging, INFO
 from schemas.datatypes import EXPECTED_DTYPES_STORIES
 from conversion.shared import (
     CACHE_DIR, run_query, clean_dtypes, update_history, union_data,
-    export_hyper, load_config, log_dataframe_summary,
+    export_hyper, load_config, log_dataframe_summary, publish_hyper,
 )
 from conversion.console import (
     print_header, step_spinner, print_info, print_pipeline_complete,
@@ -22,7 +22,8 @@ setup_logging(
 )
 logger = get_logger(__name__)
 
-TOTAL_STEPS = 5
+TOTAL_STEPS_BASE = 5
+TOTAL_STEPS_PUBLISH = 6
 
 
 def fetch_summary_full(config: dict) -> pd.DataFrame:
@@ -92,21 +93,22 @@ def run_update_cache(config: dict):
     logger.info("Stories cache update complete")
 
 
-def run(config: dict):
+def run(config: dict, publish: bool = False):
     cfg = config["stories"]
     cache_path = CACHE_DIR / cfg["cache_filename"]
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
+    total = TOTAL_STEPS_PUBLISH if publish else TOTAL_STEPS_BASE
     start = time.time()
 
     print_header("Stories Pipeline")
     logger.info("Starting stories pipeline")
 
-    with step_spinner(1, TOTAL_STEPS, "Fetching summary"):
+    with step_spinner(1, total, "Fetching summary"):
         df_summary = fetch_summary_full(config)
         df_summary = clean_dtypes(df_summary, EXPECTED_DTYPES_STORIES)
     log_dataframe_summary(df_summary, "Stories Summary")
 
-    with step_spinner(2, TOTAL_STEPS, "Updating history cache"):
+    with step_spinner(2, total, "Updating history cache"):
         df_history = update_history(
             cfg["sql_history_full"], cfg["sql_history_recent"],
             cfg["key_column"], cache_path,
@@ -114,19 +116,23 @@ def run(config: dict):
         df_history = clean_dtypes(df_history, EXPECTED_DTYPES_STORIES)
     log_dataframe_summary(df_history, "Stories History")
 
-    with step_spinner(3, TOTAL_STEPS, "Fetching epics"):
+    with step_spinner(3, total, "Fetching epics"):
         stories = union_data(df_summary, df_history)
         epics = fetch_epics_full(config)
         epics = clean_dtypes(epics, EXPECTED_DTYPES_STORIES)
 
-    with step_spinner(4, TOTAL_STEPS, "Joining & transforming"):
+    with step_spinner(4, total, "Joining & transforming"):
         df = join_stories_data(stories, epics)
         df = data_functions(df)
 
     log_dataframe_summary(df, "Stories Final")
 
-    with step_spinner(5, TOTAL_STEPS, "Exporting hyper"):
+    with step_spinner(5, total, "Exporting hyper"):
         export_hyper(df, hyper_path, "Stories", config)
+
+    if publish:
+        with step_spinner(6, total, "Publishing to Tableau"):
+            publish_hyper(hyper_path, "Stories", config)
 
     elapsed = time.time() - start
     logger.info("Stories pipeline complete")

@@ -22,6 +22,12 @@ stories:
   sql_summary: "Asum.sql"
   sql_epics: "EsumEhist.sql"
 
+tableau:
+  server_url: ""
+  site_id: ""
+  project_name: ""
+  overwrite: true
+
 epics:
   hyper_filename: "EPICS.hyper"
   cache_filename: "epics_history_cache"
