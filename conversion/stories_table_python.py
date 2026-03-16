@@ -1,0 +1,133 @@
+import time
+from datetime import datetime
+import pandas as pd
+from pathlib import Path
+from common.logging import get_logger, setup_logging, INFO
+from schemas.datatypes import EXPECTED_DTYPES_STORIES
+from conversion.shared import (
+    CACHE_DIR, run_query, clean_dtypes, update_history, union_data,
+    export_hyper, load_config, log_dataframe_summary,
+)
+from conversion.console import (
+    print_header, step_spinner, print_info, print_pipeline_complete,
+)
+
+SCRIPT_DIR = Path(__file__).parent
+OUTPUT_DIR = SCRIPT_DIR / "output"
+
+setup_logging(
+    workflow_name=Path(__file__).stem,
+    log_dir=SCRIPT_DIR / "logs",
+    console_level=INFO,
+)
+logger = get_logger(__name__)
+
+TOTAL_STEPS = 5
+
+
+def fetch_summary_full(config: dict) -> pd.DataFrame:
+    cfg = config["stories"]
+    df = run_query(cfg["sql_summary"], database=config["database"]["name"])
+
+    if "LAST_UPDATED" in df.columns:
+        df["LAST_UPDATED"] = pd.to_datetime(df["LAST_UPDATED"], errors="coerce")
+
+    key_col = cfg["key_column"]
+    if key_col in df.columns:
+        df[key_col] = df[key_col].astype(str)
+
+    return df
+
+
+def fetch_epics_full(config: dict) -> pd.DataFrame:
+    cfg = config["stories"]
+    df = run_query(cfg["sql_epics"], database=config["database"]["name"])
+
+    if "FEATURE_ID" in df.columns:
+        df["FEATURE_ID"] = df["FEATURE_ID"].astype(str)
+
+    return df
+
+
+def join_stories_data(stories: pd.DataFrame, epics: pd.DataFrame) -> pd.DataFrame:
+    return pd.merge(
+        left=stories,
+        right=epics,
+        how="left",
+        on=["FEATURE_ID", "SNAPSHOT_DATE"],
+        suffixes=("_stories", "_epics"),
+    )
+
+
+def data_functions(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
+    now = pd.Timestamp.now()
+    local_tz = datetime.now().astimezone().tzname()
+    logger.info(f"LAST_UPDATED set to {now} (timezone: {local_tz})")
+    print_info(f"LAST_UPDATED: [bold]{now}[/]  [dim](timezone: {local_tz})[/]")
+    df["LAST_UPDATED"] = now
+    df["PROJECT_NAME_VERSION"] = df["PROJECT_NAME"] + " " + df["FIX_VERSION"]
+
+    df.columns = (
+        df.columns
+        .str.lower()
+        .str.replace("_", " ", regex=False)
+        .str.title()
+    )
+
+    return df
+
+
+def run_update_cache(config: dict):
+    cfg = config["stories"]
+    cache_path = CACHE_DIR / cfg["cache_filename"]
+    print_header("Stories Cache Update")
+    logger.info("Updating stories history cache")
+    with step_spinner(1, 1, "Updating history cache"):
+        update_history(
+            cfg["sql_history_full"], cfg["sql_history_recent"],
+            cfg["key_column"], cache_path,
+        )
+    logger.info("Stories cache update complete")
+
+
+def run(config: dict):
+    cfg = config["stories"]
+    cache_path = CACHE_DIR / cfg["cache_filename"]
+    hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
+    start = time.time()
+
+    print_header("Stories Pipeline")
+    logger.info("Starting stories pipeline")
+
+    with step_spinner(1, TOTAL_STEPS, "Fetching summary"):
+        df_summary = fetch_summary_full(config)
+        df_summary = clean_dtypes(df_summary, EXPECTED_DTYPES_STORIES)
+    log_dataframe_summary(df_summary, "Stories Summary")
+
+    with step_spinner(2, TOTAL_STEPS, "Updating history cache"):
+        df_history = update_history(
+            cfg["sql_history_full"], cfg["sql_history_recent"],
+            cfg["key_column"], cache_path,
+        )
+        df_history = clean_dtypes(df_history, EXPECTED_DTYPES_STORIES)
+    log_dataframe_summary(df_history, "Stories History")
+
+    with step_spinner(3, TOTAL_STEPS, "Fetching epics"):
+        stories = union_data(df_summary, df_history)
+        epics = fetch_epics_full(config)
+        epics = clean_dtypes(epics, EXPECTED_DTYPES_STORIES)
+
+    with step_spinner(4, TOTAL_STEPS, "Joining & transforming"):
+        df = join_stories_data(stories, epics)
+        df = data_functions(df)
+
+    log_dataframe_summary(df, "Stories Final")
+
+    with step_spinner(5, TOTAL_STEPS, "Exporting hyper"):
+        export_hyper(df, hyper_path, "Stories", config)
+
+    elapsed = time.time() - start
+    logger.info("Stories pipeline complete")
+    print_pipeline_complete("Stories", elapsed)

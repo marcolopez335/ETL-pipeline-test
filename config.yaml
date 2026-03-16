@@ -1,0 +1,31 @@
+database:
+  name: "default"
+  use_stored_credentials: true
+
+paths:
+  sql_dir: "sql"
+  cache_dir: "cache"
+  output_dir: "output"
+  log_dir: "logs"
+  backup_dir: "backups"
+
+backup:
+  enabled: true
+  max_backups: 5
+
+stories:
+  hyper_filename: "STORIES.hyper"
+  cache_filename: "stories_history_cache"
+  key_column: "STORY_NUMBER"
+  sql_history_full: "Ahist.sql"
+  sql_history_recent: "Ahist_recent.sql"
+  sql_summary: "Asum.sql"
+  sql_epics: "EsumEhist.sql"
+
+epics:
+  hyper_filename: "EPICS.hyper"
+  cache_filename: "epics_history_cache"
+  key_column: "EPIC_KEY"
+  sql_history_full: "EpicHistory.sql"
+  sql_history_recent: "EpicHistory_recent.sql"
+  sql_summary: "EpicSummary.sql"
