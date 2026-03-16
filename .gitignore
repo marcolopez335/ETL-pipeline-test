@@ -16,6 +16,9 @@ output/
 backups/
 logs/
 
+# Legacy pandas code (kept locally, not tracked)
+conversion/pandas_legacy/
+
 # IDE
 .vscode/
 .idea/

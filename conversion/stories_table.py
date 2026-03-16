@@ -1,6 +1,6 @@
 import time
 from datetime import datetime
-import pandas as pd
+import polars as pl
 from pathlib import Path
 from common.logging import get_logger, setup_logging, INFO
 from schemas.datatypes import EXPECTED_DTYPES_STORIES
@@ -26,56 +26,42 @@ TOTAL_STEPS_BASE = 5
 TOTAL_STEPS_PUBLISH = 6
 
 
-def fetch_summary_full(config: dict) -> pd.DataFrame:
+def fetch_summary_full(config: dict) -> pl.DataFrame:
     cfg = config["stories"]
-    df = run_query(cfg["sql_summary"], database=config["database"]["name"])
-
-    if "LAST_UPDATED" in df.columns:
-        df["LAST_UPDATED"] = pd.to_datetime(df["LAST_UPDATED"], errors="coerce")
-
-    key_col = cfg["key_column"]
-    if key_col in df.columns:
-        df[key_col] = df[key_col].astype(str)
-
-    return df
+    return run_query(cfg["sql_summary"], database=config["database"]["name"])
 
 
-def fetch_epics_full(config: dict) -> pd.DataFrame:
+def fetch_epics_full(config: dict) -> pl.DataFrame:
     cfg = config["stories"]
-    df = run_query(cfg["sql_epics"], database=config["database"]["name"])
-
-    if "FEATURE_ID" in df.columns:
-        df["FEATURE_ID"] = df["FEATURE_ID"].astype(str)
-
-    return df
+    return run_query(cfg["sql_epics"], database=config["database"]["name"])
 
 
-def join_stories_data(stories: pd.DataFrame, epics: pd.DataFrame) -> pd.DataFrame:
-    return pd.merge(
-        left=stories,
-        right=epics,
-        how="left",
+def join_stories_data(stories: pl.DataFrame, epics: pl.DataFrame) -> pl.DataFrame:
+    return stories.join(
+        epics,
         on=["FEATURE_ID", "SNAPSHOT_DATE"],
-        suffixes=("_stories", "_epics"),
+        how="left",
+        suffix="_epics",
     )
 
 
-def data_functions(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-
-    now = pd.Timestamp.now()
-    local_tz = datetime.now().astimezone().tzname()
+def data_functions(df: pl.DataFrame) -> pl.DataFrame:
+    now = datetime.now()
+    local_tz = now.astimezone().tzname()
     logger.info(f"LAST_UPDATED set to {now} (timezone: {local_tz})")
     print_info(f"LAST_UPDATED: [bold]{now}[/]  [dim](timezone: {local_tz})[/]")
-    df["LAST_UPDATED"] = now
-    df["PROJECT_NAME_VERSION"] = df["PROJECT_NAME"] + " " + df["FIX_VERSION"]
 
-    df.columns = (
-        df.columns
-        .str.lower()
-        .str.replace("_", " ", regex=False)
-        .str.title()
-    )
+    df = df.with_columns([
+        pl.lit(now).alias("LAST_UPDATED"),
+        (pl.col("PROJECT_NAME") + " " + pl.col("FIX_VERSION")).alias("PROJECT_NAME_VERSION"),
+    ])
+
+    # Rename columns: SNAKE_CASE -> Title Case
+    rename_map = {
+        col: col.lower().replace("_", " ").title()
+        for col in df.columns
+    }
+    df = df.rename(rename_map)
 
     return df
 
@@ -83,7 +69,7 @@ def data_functions(df: pd.DataFrame) -> pd.DataFrame:
 def run_update_cache(config: dict):
     cfg = config["stories"]
     cache_path = CACHE_DIR / cfg["cache_filename"]
-    print_header("Stories Cache Update")
+    print_header("Stories Cache Update (Polars)")
     logger.info("Updating stories history cache")
     with step_spinner(1, 1, "Updating history cache"):
         update_history(
@@ -100,7 +86,7 @@ def run(config: dict, publish: bool = False):
     total = TOTAL_STEPS_PUBLISH if publish else TOTAL_STEPS_BASE
     start = time.time()
 
-    print_header("Stories Pipeline")
+    print_header("Stories Pipeline (Polars)")
     logger.info("Starting stories pipeline")
 
     with step_spinner(1, total, "Fetching summary"):

@@ -3,8 +3,8 @@ from pathlib import Path
 from common.logging import get_logger, setup_logging, INFO
 from conversion.shared import test_connection, load_config
 from conversion.console import print_header, print_success, print_error, console
-from conversion import stories_table_python as stories
-from conversion import epics_table_python as epics
+from conversion import stories_table as stories
+from conversion import epics_table as epics
 
 SCRIPT_DIR = Path(__file__).parent
 

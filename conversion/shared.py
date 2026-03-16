@@ -1,6 +1,7 @@
 import shutil
 from datetime import datetime
 
+import polars as pl
 import pandas as pd
 import pantab as pt
 import yaml
@@ -11,15 +12,13 @@ from common.tableau.publish import (
     TableauPublishConfig, publish_hyper_to_tableau, TABLEAU_SERVICE_NAME,
 )
 from conversion.console import (
-    print_dataframe_summary, print_info, print_success, print_error,
+    print_polars_summary, print_info, print_success, print_error,
 )
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 SQL_DIR = ROOT_DIR / "sql"
 CACHE_DIR = ROOT_DIR / "cache"
 BACKUP_DIR = ROOT_DIR / "backups"
-
-pd.options.mode.string_storage = "pyarrow"
 
 logger = get_logger(__name__)
 
@@ -41,15 +40,20 @@ def load_sql(filename: str) -> str:
     return sql_path.read_text(encoding="utf-8")
 
 
-def run_query(sql_filename: str, database: str = "default", verbose: bool = True) -> pd.DataFrame:
+def run_query(sql_filename: str, database: str = "default", verbose: bool = True) -> pl.DataFrame:
     logger.info(f"Running query: {sql_filename}")
     query = load_sql(sql_filename)
     conn = TibcoConnection()
     conn.connect(database=database, use_stored_credentials=True)
 
     try:
-        df = conn.execute_query(query, verbose=verbose)
-        logger.info(f"Query returned {len(df)} rows")
+        pdf = conn.execute_query(query, verbose=verbose)
+        df = pl.from_pandas(pdf)
+        # Cast any Null-typed columns (all-null from pandas) to Utf8 early
+        null_cols = [c for c in df.columns if df[c].dtype == pl.Null]
+        if null_cols:
+            df = df.with_columns([pl.col(c).cast(pl.Utf8) for c in null_cols])
+        logger.info(f"Query returned {df.height} rows")
     except Exception as exc:
         logger.error(f"Failed to execute {sql_filename}: {exc}")
         raise
@@ -75,38 +79,53 @@ def test_connection(database: str = "default") -> bool:
         conn.close()
 
 
-def clean_dtypes(df: pd.DataFrame, schema: dict) -> pd.DataFrame:
-    df = df.copy()
-
+def clean_dtypes(df: pl.DataFrame, schema: dict) -> pl.DataFrame:
+    casts = []
     for col, dtype in schema.items():
         if col not in df.columns:
             continue
 
         if dtype == "datetime":
-            df[col] = pd.to_datetime(df[col], errors="coerce")
+            casts.append(pl.col(col).cast(pl.Datetime, strict=False))
         elif dtype == "float":
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+            casts.append(pl.col(col).cast(pl.Float64, strict=False))
         elif dtype == "string":
-            df[col] = df[col].astype("string").str.strip()
+            casts.append(pl.col(col).cast(pl.Utf8, strict=False).str.strip_chars())
+
+    if casts:
+        df = df.with_columns(casts)
 
     return df
 
 
-def log_dataframe_summary(df: pd.DataFrame, label: str) -> None:
-    total_mem = int(df.memory_usage(deep=True).sum())
+def log_dataframe_summary(df: pl.DataFrame, label: str) -> None:
+    total_mem = df.estimated_size()
     logger.info(f"--- {label} Summary ---")
-    logger.info(f"  Rows: {len(df)}  Columns: {len(df.columns)}  Memory: {total_mem:,} bytes")
+    logger.info(f"  Rows: {df.height}  Columns: {df.width}  Memory: {total_mem:,} bytes")
+    null_counts = df.null_count()
+    try:
+        n_unique = df.select(pl.all().n_unique())
+    except Exception:
+        n_unique = None
+    total_nulls = 0
     for col in df.columns:
-        null_count = int(df[col].isna().sum())
-        null_pct = (null_count / len(df) * 100) if len(df) > 0 else 0.0
-        unique_count = int(df[col].nunique())
-        logger.info(f"    {col:<30} {str(df[col].dtype):<20} nulls: {null_count} ({null_pct:.1f}%)  uniques: {unique_count}")
-    total_nulls = int(df.isna().sum().sum())
-    total_cells = df.shape[0] * df.shape[1]
+        null_count = null_counts[col][0]
+        total_nulls += null_count
+        null_pct = (null_count / df.height * 100) if df.height > 0 else 0.0
+        if n_unique is not None:
+            unique_count = n_unique[col][0]
+        else:
+            try:
+                unique_count = df[col].n_unique()
+            except Exception:
+                unique_count = -1
+        unique_str = str(unique_count) if unique_count >= 0 else "n/a"
+        logger.info(f"    {col:<30} {str(df[col].dtype):<20} nulls: {null_count} ({null_pct:.1f}%)  uniques: {unique_str}")
+    total_cells = df.height * df.width
     total_null_pct = (total_nulls / total_cells * 100) if total_cells > 0 else 0.0
     logger.info(f"  Total null %: {total_null_pct:.1f}%")
 
-    print_dataframe_summary(df, label)
+    print_polars_summary(df, label)
 
 
 def backup_file(file_path: Path, config: dict) -> None:
@@ -127,7 +146,6 @@ def backup_file(file_path: Path, config: dict) -> None:
     logger.info(f"Backed up {file_path.name} -> {backup_path}")
     print_info(f"Backup: [dim]{backup_name}[/]")
 
-    # Clean old backups beyond max_backups
     max_backups = backup_cfg.get("max_backups", 5)
     existing = sorted(
         BACKUP_DIR.glob(f"{file_path.stem}_*{file_path.suffix}"),
@@ -139,71 +157,115 @@ def backup_file(file_path: Path, config: dict) -> None:
         logger.info(f"Removed old backup: {old.name}")
 
 
-def read_history_cache(cache_path: Path) -> pd.DataFrame:
+def read_history_cache(cache_path: Path) -> pl.DataFrame:
     if not cache_path.exists():
         logger.info(f"No cache found at {cache_path}")
-        return pd.DataFrame()
+        return pl.DataFrame()
 
-    df = pd.read_parquet(cache_path)
-    logger.info(f"Read {len(df)} rows from cache")
+    df = pl.read_parquet(cache_path)
+    logger.info(f"Read {df.height} rows from cache")
     return df
 
 
-def write_history_cache(df: pd.DataFrame, cache_path: Path) -> None:
+def write_history_cache(df: pl.DataFrame, cache_path: Path) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(cache_path, index=False)
-    logger.info(f"Wrote {len(df)} rows to cache: {cache_path}")
+    df.write_parquet(cache_path)
+    logger.info(f"Wrote {df.height} rows to cache: {cache_path}")
 
 
-def fetch_history(sql_filename: str, key_col: str) -> pd.DataFrame:
+def _safe_dtype(dtype: pl.DataType) -> pl.DataType:
+    """Return Utf8 if dtype is Null, otherwise return as-is."""
+    return pl.Utf8 if dtype == pl.Null else dtype
+
+
+def _align_schemas(df1: pl.DataFrame, df2: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Align two DataFrames to the same columns and types before concat."""
+    all_cols = dict.fromkeys(df1.columns + df2.columns)
+
+    for col in all_cols:
+        if col in df1.columns and col in df2.columns:
+            if df1[col].dtype == pl.Null and df2[col].dtype == pl.Null:
+                # Both Null — cast both to Utf8 so downstream doesn't choke
+                df1 = df1.with_columns(pl.col(col).cast(pl.Utf8))
+                df2 = df2.with_columns(pl.col(col).cast(pl.Utf8))
+            elif df1[col].dtype != df2[col].dtype:
+                if df1[col].dtype == pl.Null:
+                    df1 = df1.with_columns(pl.col(col).cast(df2[col].dtype))
+                elif df2[col].dtype == pl.Null:
+                    df2 = df2.with_columns(pl.col(col).cast(df1[col].dtype))
+                else:
+                    # Both non-null but different — cast to supertype
+                    try:
+                        super_type = pl.datatypes.unify_dtypes([df1[col].dtype, df2[col].dtype])
+                        df1 = df1.with_columns(pl.col(col).cast(super_type, strict=False))
+                        df2 = df2.with_columns(pl.col(col).cast(super_type, strict=False))
+                    except Exception:
+                        df1 = df1.with_columns(pl.col(col).cast(pl.Utf8, strict=False))
+                        df2 = df2.with_columns(pl.col(col).cast(pl.Utf8, strict=False))
+        elif col not in df1.columns:
+            df1 = df1.with_columns(pl.lit(None).cast(_safe_dtype(df2[col].dtype)).alias(col))
+        else:
+            df2 = df2.with_columns(pl.lit(None).cast(_safe_dtype(df1[col].dtype)).alias(col))
+
+    # Ensure same column order
+    df2 = df2.select(df1.columns)
+    return df1, df2
+
+
+def fetch_history(sql_filename: str, key_col: str) -> pl.DataFrame:
     df = run_query(sql_filename)
-
-    if "SNAPSHOT_DATE" in df.columns:
-        df["SNAPSHOT_DATE"] = pd.to_datetime(df["SNAPSHOT_DATE"], errors="coerce")
 
     required = {key_col, "SNAPSHOT_DATE"}
     missing = required - set(df.columns)
     if missing:
         raise KeyError(f"Table missing columns: {missing}")
 
+    df = df.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Datetime, strict=False))
+
     return df
 
 
 def update_history_cache_with_recent(
-    cached: pd.DataFrame, recent: pd.DataFrame, key_col: str
-) -> pd.DataFrame:
+    cached: pl.DataFrame, recent: pl.DataFrame, key_col: str
+) -> pl.DataFrame:
     KEY_COLS = [key_col, "SNAPSHOT_DATE"]
 
-    cached = cached.copy()
-    recent = recent.copy()
+    cached = cached.with_columns([
+        pl.col("SNAPSHOT_DATE").cast(pl.Datetime, strict=False),
+        pl.col(key_col).cast(pl.Utf8, strict=False),
+    ])
+    recent = recent.with_columns([
+        pl.col("SNAPSHOT_DATE").cast(pl.Datetime, strict=False),
+        pl.col(key_col).cast(pl.Utf8, strict=False),
+    ])
 
-    cached["SNAPSHOT_DATE"] = pd.to_datetime(cached["SNAPSHOT_DATE"], errors="coerce")
-    recent["SNAPSHOT_DATE"] = pd.to_datetime(recent["SNAPSHOT_DATE"], errors="coerce")
+    if cached.height == 0:
+        return recent.drop_nulls(subset=KEY_COLS).unique(subset=KEY_COLS, keep="last")
 
-    cached[key_col] = cached[key_col].astype(str)
-    recent[key_col] = recent[key_col].astype(str)
+    # Native anti-join
+    cached_keep = cached.join(
+        recent.select(KEY_COLS).unique(),
+        on=KEY_COLS,
+        how="anti",
+    )
 
-    if cached.empty:
-        return recent.dropna(subset=KEY_COLS).drop_duplicates(subset=KEY_COLS, keep="last")
+    # Align schemas before concat — cached from parquet may differ from fresh query
+    cached_keep, recent = _align_schemas(cached_keep, recent)
 
-    # Anti-join: keep cached rows whose keys aren't in recent
-    merged = cached.merge(recent[KEY_COLS].drop_duplicates(), on=KEY_COLS, how="left", indicator=True)
-    cached_keep = merged[merged["_merge"] == "left_only"].drop(columns="_merge")
+    combined = pl.concat([cached_keep, recent])
+    combined = combined.drop_nulls(subset=KEY_COLS)
+    combined = combined.unique(subset=KEY_COLS, keep="last")
 
-    combined = pd.concat([cached_keep, recent], ignore_index=True)
-    combined = combined.dropna(subset=KEY_COLS)
-    combined = combined.drop_duplicates(subset=KEY_COLS, keep="last")
-
-    if len(combined) < 0.98 * len(cached):
+    if combined.height < 0.98 * cached.height:
         raise RuntimeError(
-            f"Cache shrank unexpectedly: {len(combined)} rows vs {len(cached)} prior"
+            f"Cache shrank unexpectedly: {combined.height} rows vs {cached.height} prior"
         )
 
-    logger.info(f"Cache updated: {len(cached)} -> {len(combined)} rows")
+    logger.info(f"Cache updated: {cached.height} -> {combined.height} rows")
     return combined
 
 
-def build_and_cache_history(sql_full: str, key_col: str, cache_path: Path) -> pd.DataFrame:
+def build_and_cache_history(sql_full: str, key_col: str, cache_path: Path) -> pl.DataFrame:
     logger.info("Building full history cache")
     df = fetch_history(sql_full, key_col)
     write_history_cache(df, cache_path)
@@ -212,10 +274,10 @@ def build_and_cache_history(sql_full: str, key_col: str, cache_path: Path) -> pd
 
 def update_history(
     sql_full: str, sql_recent: str, key_col: str, cache_path: Path
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     cached = read_history_cache(cache_path)
 
-    if cached.empty:
+    if cached.height == 0:
         return build_and_cache_history(sql_full, key_col, cache_path)
 
     recent = fetch_history(sql_recent, key_col)
@@ -225,16 +287,22 @@ def update_history(
     return updated
 
 
-def union_data(df_summary: pd.DataFrame, df_history: pd.DataFrame) -> pd.DataFrame:
-    unioned = pd.concat([df_summary, df_history], ignore_index=True, sort=False)
-    return unioned.drop_duplicates()
+def union_data(df_summary: pl.DataFrame, df_history: pl.DataFrame) -> pl.DataFrame:
+    df_summary, df_history = _align_schemas(df_summary, df_history)
+    unioned = pl.concat([df_summary, df_history])
+    return unioned.unique()
 
 
-def export_hyper(df: pd.DataFrame, hyper_path: Path, table_name: str, config: dict) -> None:
+def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: dict) -> None:
     hyper_path.parent.mkdir(parents=True, exist_ok=True)
     backup_file(hyper_path, config)
-    pt.frame_to_hyper(df, database=hyper_path, table_mode="w", table=table_name)
-    logger.info(f"Exported {len(df)} rows to {hyper_path} (table: {table_name})")
+    # Cast Null-typed columns to String so pantab doesn't choke on Arrow na type
+    null_cols = [col for col in df.columns if df[col].dtype == pl.Null]
+    if null_cols:
+        df = df.with_columns([pl.col(c).cast(pl.Utf8) for c in null_cols])
+    pdf = df.to_pandas(use_pyarrow_extension_types=False)
+    pt.frame_to_hyper(pdf, database=hyper_path, table_mode="w", table=table_name)
+    logger.info(f"Exported {df.height} rows to {hyper_path} (table: {table_name})")
 
 
 def publish_hyper(hyper_path: Path, table_name: str, config: dict) -> None:

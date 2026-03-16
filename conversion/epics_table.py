@@ -1,5 +1,5 @@
 import time
-import pandas as pd
+import polars as pl
 from pathlib import Path
 from common.logging import get_logger, setup_logging, INFO
 from schemas.datatypes import EXPECTED_DTYPES_EPICS
@@ -21,57 +21,44 @@ setup_logging(
 )
 logger = get_logger(__name__)
 
-def fetch_summary_full(config: dict) -> pd.DataFrame:
+def fetch_summary_full(config: dict) -> pl.DataFrame:
     cfg = config["epics"]
-    df = run_query(cfg["sql_summary"], database=config["database"]["name"])
-
-    if "LAST_UPDATED" in df.columns:
-        df["LAST_UPDATED"] = pd.to_datetime(df["LAST_UPDATED"], errors="coerce")
-
-    key_col = cfg["key_column"]
-    if key_col in df.columns:
-        df[key_col] = df[key_col].astype(str)
-
-    return df
+    return run_query(cfg["sql_summary"], database=config["database"]["name"])
 
 
-def build_acrp(df: pd.DataFrame) -> pd.DataFrame:
+def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
     # Filter: null snapshot date AND row is a feature or subcapability level
-    mask = (
-        df["SNAPSHOT_DATE"].isna()
-        & (df["FEATURE_KEY"].notna() | df["SUBCAPABILITY_KEY"].notna())
+    filtered = df.filter(
+        pl.col("SNAPSHOT_DATE").is_null()
+        & (pl.col("FEATURE_KEY").is_not_null() | pl.col("SUBCAPABILITY_KEY").is_not_null())
     )
-    filtered = df.loc[mask].copy()
 
-    logger.info(f"ACRP filter: {len(filtered)} rows from {len(df)} (null snapshot, feature/subcap)")
+    logger.info(f"ACRP filter: {filtered.height} rows from {df.height} (null snapshot, feature/subcap)")
 
     # Split FEATURE_FIX_VERSION on comma into separate rows
-    filtered["FEATURE_FIX_VERSION"] = filtered["FEATURE_FIX_VERSION"].astype(str)
-    split = filtered.assign(
-        FEATURE_FIX_VERSION=filtered["FEATURE_FIX_VERSION"].str.split(",")
-    ).explode("FEATURE_FIX_VERSION", ignore_index=True)
-    split["FEATURE_FIX_VERSION"] = split["FEATURE_FIX_VERSION"].str.strip()
-
-    # Summarize: min and max target release per feature number
-    summary = (
-        split.groupby("FEATURE_KEY", as_index=False)
-        .agg(
-            MIN_TARGET_RELEASE=("FEATURE_FIX_VERSION", "min"),
-            MAX_TARGET_RELEASE=("FEATURE_FIX_VERSION", "max"),
-        )
+    split = filtered.with_columns(
+        pl.col("FEATURE_FIX_VERSION").cast(pl.Utf8).str.split(",")
+    ).explode("FEATURE_FIX_VERSION").with_columns(
+        pl.col("FEATURE_FIX_VERSION").str.strip_chars()
     )
 
-    # Inner join back to the split data
-    result = split.merge(summary, on="FEATURE_KEY", how="inner")
+    # Summarize: min and max target release per feature number
+    summary = split.group_by("FEATURE_KEY").agg([
+        pl.col("FEATURE_FIX_VERSION").min().alias("MIN_TARGET_RELEASE"),
+        pl.col("FEATURE_FIX_VERSION").max().alias("MAX_TARGET_RELEASE"),
+    ])
 
-    logger.info(f"ACRP result: {len(result)} rows, {result['FEATURE_KEY'].nunique()} features")
+    # Inner join back to the split data
+    result = split.join(summary, on="FEATURE_KEY", how="inner")
+
+    logger.info(f"ACRP result: {result.height} rows, {result['FEATURE_KEY'].n_unique()} features")
     return result
 
 
 def run_update_cache(config: dict):
     cfg = config["epics"]
     cache_path = CACHE_DIR / cfg["cache_filename"]
-    print_header("Epics Cache Update")
+    print_header("Epics Cache Update (Polars)")
     logger.info("Updating epics history cache")
     with step_spinner(1, 1, "Updating history cache"):
         update_history(
@@ -82,8 +69,6 @@ def run_update_cache(config: dict):
 
 
 def _calc_steps(publish: bool) -> int:
-    # base: summary, history, union, export epics, build acrp, export acrp = 6
-    # publish adds 2 more (publish epics + publish acrp)
     return 8 if publish else 6
 
 
@@ -95,7 +80,7 @@ def run(config: dict, publish: bool = False):
     total = _calc_steps(publish)
     start = time.time()
 
-    print_header("Epics Pipeline")
+    print_header("Epics Pipeline (Polars)")
     logger.info("Starting epics pipeline")
 
     with step_spinner(1, total, "Fetching summary"):
