@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 from common.logging import get_logger, setup_logging, INFO
 from conversion.shared import test_connection, load_config
-from conversion.console import print_header, print_success, print_error, console
+from conversion.console import print_banner, print_header, print_success, print_error, console
 from conversion import stories_table as stories
 from conversion import epics_table as epics
 
@@ -27,9 +27,7 @@ def main():
 
     config = load_config()
 
-    console.print()
-    console.rule("[bold cyan]ODBC Data Pipeline[/]", style="cyan")
-    console.print()
+    print_banner()
 
     # If no flags given, run everything
     run_all = not (args.stories or args.epics or args.update_cache or args.test)
