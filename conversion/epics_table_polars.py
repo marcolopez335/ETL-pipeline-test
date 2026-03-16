@@ -32,22 +32,22 @@ def fetch_summary_full(config: dict) -> pl.DataFrame:
 def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
     # Filter: null snapshot date AND type is Feature or Sub-capability
     filtered = df.filter(
-        pl.col("SNAPSHOT_DATE").is_null() & pl.col("TYPE").is_in(ACRP_TYPES)
+        pl.col("SNAPSHOT_DATE").is_null() & pl.col("FEATURE_TYPE").is_in(ACRP_TYPES)
     )
 
     logger.info(f"ACRP filter: {filtered.height} rows from {df.height} (null snapshot, Feature/Sub-capability)")
 
-    # Split TARGET_RELEASE on comma into separate rows
+    # Split FEATURE_FIX_VERSION on comma into separate rows
     split = filtered.with_columns(
-        pl.col("TARGET_RELEASE").cast(pl.Utf8).str.split(",")
-    ).explode("TARGET_RELEASE").with_columns(
-        pl.col("TARGET_RELEASE").str.strip_chars()
+        pl.col("FEATURE_FIX_VERSION").cast(pl.Utf8).str.split(",")
+    ).explode("FEATURE_FIX_VERSION").with_columns(
+        pl.col("FEATURE_FIX_VERSION").str.strip_chars()
     )
 
     # Summarize: min and max target release per feature number
     summary = split.group_by("FEATURE_NUMBER").agg([
-        pl.col("TARGET_RELEASE").min().alias("MIN_TARGET_RELEASE"),
-        pl.col("TARGET_RELEASE").max().alias("MAX_TARGET_RELEASE"),
+        pl.col("FEATURE_FIX_VERSION").min().alias("MIN_TARGET_RELEASE"),
+        pl.col("FEATURE_FIX_VERSION").max().alias("MAX_TARGET_RELEASE"),
     ])
 
     # Inner join back to the split data

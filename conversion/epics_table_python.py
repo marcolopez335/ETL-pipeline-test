@@ -40,24 +40,24 @@ def fetch_summary_full(config: dict) -> pd.DataFrame:
 
 def build_acrp(df: pd.DataFrame) -> pd.DataFrame:
     # Filter: null snapshot date AND type is Feature or Sub-capability
-    mask = df["SNAPSHOT_DATE"].isna() & df["TYPE"].isin(ACRP_TYPES)
+    mask = df["SNAPSHOT_DATE"].isna() & df["FEATURE_TYPE"].isin(ACRP_TYPES)
     filtered = df.loc[mask].copy()
 
     logger.info(f"ACRP filter: {len(filtered)} rows from {len(df)} (null snapshot, Feature/Sub-capability)")
 
-    # Split TARGET_RELEASE on comma into separate rows
-    filtered["TARGET_RELEASE"] = filtered["TARGET_RELEASE"].astype(str)
+    # Split FEATURE_FIX_VERSION on comma into separate rows
+    filtered["FEATURE_FIX_VERSION"] = filtered["FEATURE_FIX_VERSION"].astype(str)
     split = filtered.assign(
-        TARGET_RELEASE=filtered["TARGET_RELEASE"].str.split(",")
-    ).explode("TARGET_RELEASE", ignore_index=True)
-    split["TARGET_RELEASE"] = split["TARGET_RELEASE"].str.strip()
+        FEATURE_FIX_VERSION=filtered["FEATURE_FIX_VERSION"].str.split(",")
+    ).explode("FEATURE_FIX_VERSION", ignore_index=True)
+    split["FEATURE_FIX_VERSION"] = split["FEATURE_FIX_VERSION"].str.strip()
 
     # Summarize: min and max target release per feature number
     summary = (
         split.groupby("FEATURE_NUMBER", as_index=False)
         .agg(
-            MIN_TARGET_RELEASE=("TARGET_RELEASE", "min"),
-            MAX_TARGET_RELEASE=("TARGET_RELEASE", "max"),
+            MIN_TARGET_RELEASE=("FEATURE_FIX_VERSION", "min"),
+            MAX_TARGET_RELEASE=("FEATURE_FIX_VERSION", "max"),
         )
     )
 
