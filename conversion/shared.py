@@ -93,20 +93,19 @@ def clean_dtypes(df: pd.DataFrame, schema: dict) -> pd.DataFrame:
 
 
 def log_dataframe_summary(df: pd.DataFrame, label: str) -> None:
-    # File logging
+    total_mem = int(df.memory_usage(deep=True).sum())
     logger.info(f"--- {label} Summary ---")
-    logger.info(f"  Rows: {len(df)}")
-    logger.info(f"  Columns: {len(df.columns)}")
+    logger.info(f"  Rows: {len(df)}  Columns: {len(df.columns)}  Memory: {total_mem:,} bytes")
     for col in df.columns:
-        null_count = df[col].isna().sum()
+        null_count = int(df[col].isna().sum())
         null_pct = (null_count / len(df) * 100) if len(df) > 0 else 0.0
-        logger.info(f"    {col:<30} {str(df[col].dtype):<20} nulls: {null_count} ({null_pct:.1f}%)")
-    total_nulls = df.isna().sum().sum()
+        unique_count = int(df[col].nunique())
+        logger.info(f"    {col:<30} {str(df[col].dtype):<20} nulls: {null_count} ({null_pct:.1f}%)  uniques: {unique_count}")
+    total_nulls = int(df.isna().sum().sum())
     total_cells = df.shape[0] * df.shape[1]
     total_null_pct = (total_nulls / total_cells * 100) if total_cells > 0 else 0.0
     logger.info(f"  Total null %: {total_null_pct:.1f}%")
 
-    # Rich console output
     print_dataframe_summary(df, label)
 
 

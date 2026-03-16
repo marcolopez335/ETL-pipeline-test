@@ -11,6 +11,26 @@ from rich import box
 console = Console()
 
 
+def _format_bytes(nbytes: int) -> str:
+    if nbytes < 1024:
+        return f"{nbytes} B"
+    elif nbytes < 1024 ** 2:
+        return f"{nbytes / 1024:.1f} KB"
+    elif nbytes < 1024 ** 3:
+        return f"{nbytes / 1024 ** 2:.1f} MB"
+    else:
+        return f"{nbytes / 1024 ** 3:.1f} GB"
+
+
+def _format_value(val) -> str:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return "-"
+    val_str = str(val)
+    if len(val_str) > 20:
+        return val_str[:17] + "..."
+    return val_str
+
+
 def print_header(title: str) -> None:
     console.print()
     console.print(Panel(
@@ -50,8 +70,10 @@ def step_spinner(step: int, total: int, message: str):
 
 
 def print_dataframe_summary(df: pd.DataFrame, label: str) -> None:
+    total_mem = int(df.memory_usage(deep=True).sum())
+
     table = Table(
-        title=f"[bold]{label}[/]  [dim]({len(df):,} rows x {len(df.columns)} cols)[/]",
+        title=f"[bold]{label}[/]  [dim]({len(df):,} rows x {len(df.columns)} cols | {_format_bytes(total_mem)})[/]",
         box=box.ROUNDED,
         header_style="bold cyan",
         border_style="dim",
@@ -62,10 +84,16 @@ def print_dataframe_summary(df: pd.DataFrame, label: str) -> None:
     table.add_column("Dtype", style="yellow")
     table.add_column("Nulls", justify="right", style="dim")
     table.add_column("Null %", justify="right")
+    table.add_column("Uniques", justify="right", style="cyan")
+    table.add_column("Min", style="dim")
+    table.add_column("Max", style="dim")
+    table.add_column("Memory", justify="right", style="dim")
 
     for col in df.columns:
         null_count = int(df[col].isna().sum())
         null_pct = (null_count / len(df) * 100) if len(df) > 0 else 0.0
+        unique_count = int(df[col].nunique())
+        col_mem = int(df[col].memory_usage(deep=True))
 
         if null_pct > 10:
             pct_style = "red bold"
@@ -76,11 +104,23 @@ def print_dataframe_summary(df: pd.DataFrame, label: str) -> None:
         else:
             pct_style = "green"
 
+        # Min/Max for numeric and datetime columns
+        if pd.api.types.is_numeric_dtype(df[col]) or pd.api.types.is_datetime64_any_dtype(df[col]):
+            col_min = _format_value(df[col].min())
+            col_max = _format_value(df[col].max())
+        else:
+            col_min = "-"
+            col_max = "-"
+
         table.add_row(
             col,
             str(df[col].dtype),
             f"{null_count:,}",
             Text(f"{null_pct:.1f}%", style=pct_style),
+            f"{unique_count:,}",
+            col_min,
+            col_max,
+            _format_bytes(col_mem),
         )
 
     total_nulls = int(df.isna().sum().sum())
@@ -91,6 +131,8 @@ def print_dataframe_summary(df: pd.DataFrame, label: str) -> None:
     table.add_row(
         "[bold]Total[/]", "", f"{total_nulls:,}",
         Text(f"{total_pct:.1f}%", style="bold"),
+        "", "", "",
+        f"[bold]{_format_bytes(total_mem)}[/]",
     )
 
     console.print(table)
@@ -102,9 +144,10 @@ def print_polars_summary(df, label: str) -> None:
 
     height = df.height
     width = df.width
+    total_mem = df.estimated_size()
 
     table = Table(
-        title=f"[bold]{label}[/]  [dim]({height:,} rows x {width} cols)[/]",
+        title=f"[bold]{label}[/]  [dim]({height:,} rows x {width} cols | {_format_bytes(total_mem)})[/]",
         box=box.ROUNDED,
         header_style="bold cyan",
         border_style="dim",
@@ -115,12 +158,22 @@ def print_polars_summary(df, label: str) -> None:
     table.add_column("Dtype", style="yellow")
     table.add_column("Nulls", justify="right", style="dim")
     table.add_column("Null %", justify="right")
+    table.add_column("Uniques", justify="right", style="cyan")
+    table.add_column("Min", style="dim")
+    table.add_column("Max", style="dim")
+    table.add_column("Memory", justify="right", style="dim")
+
+    # Pre-compute stats in one pass
+    null_counts = df.null_count()
+    n_unique = df.select(pl.all().n_unique())
 
     total_nulls = 0
     for col in df.columns:
-        null_count = df[col].null_count()
+        null_count = null_counts[col][0]
         total_nulls += null_count
         null_pct = (null_count / height * 100) if height > 0 else 0.0
+        unique_count = n_unique[col][0]
+        col_mem = df[col].estimated_size()
 
         if null_pct > 10:
             pct_style = "red bold"
@@ -131,11 +184,28 @@ def print_polars_summary(df, label: str) -> None:
         else:
             pct_style = "green"
 
+        # Min/Max for numeric and temporal columns
+        dtype = df[col].dtype
+        if dtype.is_numeric() or dtype.is_temporal():
+            try:
+                col_min = _format_value(df[col].min())
+                col_max = _format_value(df[col].max())
+            except Exception:
+                col_min = "-"
+                col_max = "-"
+        else:
+            col_min = "-"
+            col_max = "-"
+
         table.add_row(
             col,
-            str(df[col].dtype),
+            str(dtype),
             f"{null_count:,}",
             Text(f"{null_pct:.1f}%", style=pct_style),
+            f"{unique_count:,}",
+            col_min,
+            col_max,
+            _format_bytes(col_mem),
         )
 
     total_cells = height * width
@@ -145,6 +215,8 @@ def print_polars_summary(df, label: str) -> None:
     table.add_row(
         "[bold]Total[/]", "", f"{total_nulls:,}",
         Text(f"{total_pct:.1f}%", style="bold"),
+        "", "", "",
+        f"[bold]{_format_bytes(total_mem)}[/]",
     )
 
     console.print(table)

@@ -95,15 +95,18 @@ def clean_dtypes(df: pl.DataFrame, schema: dict) -> pl.DataFrame:
 
 
 def log_dataframe_summary(df: pl.DataFrame, label: str) -> None:
+    total_mem = df.estimated_size()
     logger.info(f"--- {label} Summary ---")
-    logger.info(f"  Rows: {df.height}")
-    logger.info(f"  Columns: {df.width}")
+    logger.info(f"  Rows: {df.height}  Columns: {df.width}  Memory: {total_mem:,} bytes")
+    null_counts = df.null_count()
+    n_unique = df.select(pl.all().n_unique())
     total_nulls = 0
     for col in df.columns:
-        null_count = df[col].null_count()
+        null_count = null_counts[col][0]
         total_nulls += null_count
         null_pct = (null_count / df.height * 100) if df.height > 0 else 0.0
-        logger.info(f"    {col:<30} {str(df[col].dtype):<20} nulls: {null_count} ({null_pct:.1f}%)")
+        unique_count = n_unique[col][0]
+        logger.info(f"    {col:<30} {str(df[col].dtype):<20} nulls: {null_count} ({null_pct:.1f}%)  uniques: {unique_count}")
     total_cells = df.height * df.width
     total_null_pct = (total_nulls / total_cells * 100) if total_cells > 0 else 0.0
     logger.info(f"  Total null %: {total_null_pct:.1f}%")
