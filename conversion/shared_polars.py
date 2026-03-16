@@ -156,6 +156,37 @@ def write_history_cache(df: pl.DataFrame, cache_path: Path) -> None:
     logger.info(f"Wrote {df.height} rows to cache: {cache_path}")
 
 
+def _align_schemas(df1: pl.DataFrame, df2: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Align two DataFrames to the same columns and types before concat."""
+    all_cols = dict.fromkeys(df1.columns + df2.columns)
+
+    for col in all_cols:
+        if col in df1.columns and col in df2.columns:
+            # If types differ, cast the Null-typed one to the other's type
+            if df1[col].dtype != df2[col].dtype:
+                if df1[col].dtype == pl.Null:
+                    df1 = df1.with_columns(pl.col(col).cast(df2[col].dtype))
+                elif df2[col].dtype == pl.Null:
+                    df2 = df2.with_columns(pl.col(col).cast(df1[col].dtype))
+                else:
+                    # Both non-null but different — cast to supertype
+                    try:
+                        super_type = pl.datatypes.unify_dtypes([df1[col].dtype, df2[col].dtype])
+                        df1 = df1.with_columns(pl.col(col).cast(super_type, strict=False))
+                        df2 = df2.with_columns(pl.col(col).cast(super_type, strict=False))
+                    except Exception:
+                        df1 = df1.with_columns(pl.col(col).cast(pl.Utf8, strict=False))
+                        df2 = df2.with_columns(pl.col(col).cast(pl.Utf8, strict=False))
+        elif col not in df1.columns:
+            df1 = df1.with_columns(pl.lit(None).cast(df2[col].dtype).alias(col))
+        else:
+            df2 = df2.with_columns(pl.lit(None).cast(df1[col].dtype).alias(col))
+
+    # Ensure same column order
+    df2 = df2.select(df1.columns)
+    return df1, df2
+
+
 def fetch_history(sql_filename: str, key_col: str) -> pl.DataFrame:
     df = run_query(sql_filename)
 
@@ -193,6 +224,9 @@ def update_history_cache_with_recent(
         how="anti",
     )
 
+    # Align schemas before concat — cached from parquet may differ from fresh query
+    cached_keep, recent = _align_schemas(cached_keep, recent)
+
     combined = pl.concat([cached_keep, recent])
     combined = combined.drop_nulls(subset=KEY_COLS)
     combined = combined.unique(subset=KEY_COLS, keep="last")
@@ -229,7 +263,8 @@ def update_history(
 
 
 def union_data(df_summary: pl.DataFrame, df_history: pl.DataFrame) -> pl.DataFrame:
-    unioned = pl.concat([df_summary, df_history], how="diagonal")
+    df_summary, df_history = _align_schemas(df_summary, df_history)
+    unioned = pl.concat([df_summary, df_history])
     return unioned.unique()
 
 
