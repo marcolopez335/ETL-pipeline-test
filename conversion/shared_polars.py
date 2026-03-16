@@ -99,14 +99,24 @@ def log_dataframe_summary(df: pl.DataFrame, label: str) -> None:
     logger.info(f"--- {label} Summary ---")
     logger.info(f"  Rows: {df.height}  Columns: {df.width}  Memory: {total_mem:,} bytes")
     null_counts = df.null_count()
-    n_unique = df.select(pl.all().n_unique())
+    try:
+        n_unique = df.select(pl.all().n_unique())
+    except Exception:
+        n_unique = None
     total_nulls = 0
     for col in df.columns:
         null_count = null_counts[col][0]
         total_nulls += null_count
         null_pct = (null_count / df.height * 100) if df.height > 0 else 0.0
-        unique_count = n_unique[col][0]
-        logger.info(f"    {col:<30} {str(df[col].dtype):<20} nulls: {null_count} ({null_pct:.1f}%)  uniques: {unique_count}")
+        if n_unique is not None:
+            unique_count = n_unique[col][0]
+        else:
+            try:
+                unique_count = df[col].n_unique()
+            except Exception:
+                unique_count = -1
+        unique_str = str(unique_count) if unique_count >= 0 else "n/a"
+        logger.info(f"    {col:<30} {str(df[col].dtype):<20} nulls: {null_count} ({null_pct:.1f}%)  uniques: {unique_str}")
     total_cells = df.height * df.width
     total_null_pct = (total_nulls / total_cells * 100) if total_cells > 0 else 0.0
     logger.info(f"  Total null %: {total_null_pct:.1f}%")

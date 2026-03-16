@@ -165,14 +165,23 @@ def print_polars_summary(df, label: str) -> None:
 
     # Pre-compute stats in one pass
     null_counts = df.null_count()
-    n_unique = df.select(pl.all().n_unique())
+    try:
+        n_unique = df.select(pl.all().n_unique())
+    except Exception:
+        n_unique = None
 
     total_nulls = 0
     for col in df.columns:
         null_count = null_counts[col][0]
         total_nulls += null_count
         null_pct = (null_count / height * 100) if height > 0 else 0.0
-        unique_count = n_unique[col][0]
+        if n_unique is not None:
+            unique_count = n_unique[col][0]
+        else:
+            try:
+                unique_count = df[col].n_unique()
+            except Exception:
+                unique_count = -1
         col_mem = df[col].estimated_size()
 
         if null_pct > 10:
@@ -202,7 +211,7 @@ def print_polars_summary(df, label: str) -> None:
             str(dtype),
             f"{null_count:,}",
             Text(f"{null_pct:.1f}%", style=pct_style),
-            f"{unique_count:,}",
+            f"{unique_count:,}" if unique_count >= 0 else "n/a",
             col_min,
             col_max,
             _format_bytes(col_mem),
