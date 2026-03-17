@@ -15,7 +15,7 @@ backup:
 
 stories:
   hyper_filename: "STORIES.hyper"
-  cache_filename: "stories_history_cache"
+  cache_filename: "stories_history_cache.parquet"
   key_column: "STORY_NUMBER"
   sql_history_full: "Ahist.sql"
   sql_history_recent: "Ahist_recent.sql"
@@ -31,7 +31,7 @@ tableau:
 epics:
   hyper_filename: "EPICS.hyper"
   acrp_hyper_filename: "EPICS_ACRP.hyper"
-  cache_filename: "epics_history_cache"
+  cache_filename: "epics_history_cache.parquet"
   key_column: "EPIC_KEY"
   sql_history_full: "EpicHistory.sql"
   sql_history_recent: "EpicHistory_recent.sql"

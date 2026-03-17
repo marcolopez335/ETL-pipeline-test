@@ -24,6 +24,9 @@ python -m sql_shell epics.parquet stories.parquet
 # Custom table names
 python -m sql_shell --name epics epics.parquet --name stories stories.parquet
 
+# Load all parquet/CSV files from a directory
+python -m sql_shell ./cache/
+
 # Custom row limit
 python -m sql_shell data.parquet --limit 50
 ```

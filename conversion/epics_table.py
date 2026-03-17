@@ -32,7 +32,7 @@ def _sprint_sort_key() -> pl.Expr:
     Example: '26.1.2' -> 260102, '26.1.IP' -> 260199
     """
     version = pl.col("SPRINT_VERSION").str.split(".")
-    major = version.list.get(0).cast(pl.Int64, strict=False).fill_null(0)
+    major = version.list.get(0).cast(pl.Int64, strict=False).fill_null(0) % 100
     minor = version.list.get(1).cast(pl.Int64, strict=False).fill_null(0)
     patch_str = version.list.get(2)
     patch = (

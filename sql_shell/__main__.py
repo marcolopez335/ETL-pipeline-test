@@ -1,11 +1,12 @@
 """
-Run the SQL shell standalone with parquet/CSV files.
+Run the SQL shell standalone with parquet/CSV files or directories.
 
 Usage:
     python -m sql_shell data.parquet
     python -m sql_shell epics.parquet stories.parquet
     python -m sql_shell data.csv --name mytable
     python -m sql_shell epics.parquet --name epics stories.parquet --name stories
+    python -m sql_shell ./cache/
 """
 
 import argparse
@@ -15,13 +16,31 @@ from sql_shell.shell import interactive_sql
 from sql_shell.display import console
 
 
+def _load_file(path: Path, name: str, tables: dict) -> bool:
+    """Load a single file into tables dict. Returns True on success."""
+    try:
+        if path.suffix == ".csv":
+            df = pl.read_csv(path)
+        elif path.suffix in (".parquet", ".pq"):
+            df = pl.read_parquet(path)
+        else:
+            console.print(f"  [dim]Skipping unsupported file: {path.name}[/]")
+            return False
+        tables[name] = df
+        console.print(f"  [green]Loaded [bold]{name}[/] from {path} ({df.height:,} rows x {df.width} cols)[/]")
+        return True
+    except Exception as exc:
+        console.print(f"  [red]Failed to load {path}: {exc}[/]")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Interactive SQL shell for Parquet and CSV files",
     )
     parser.add_argument(
         "files", nargs="+",
-        help="Parquet or CSV files to load. Use --name before a file to set the table name.",
+        help="Parquet/CSV files or directories to load. Use --name before a file to set the table name.",
     )
     parser.add_argument(
         "--limit", type=int, default=100,
@@ -46,27 +65,24 @@ def main():
                 return
         else:
             filepath = files[i]
-            name = Path(filepath).stem
+            name = None  # auto-name from stem
             i += 1
 
         path = Path(filepath)
         if not path.exists():
-            console.print(f"  [red]File not found: {filepath}[/]")
+            console.print(f"  [red]Not found: {filepath}[/]")
             return
 
-        try:
-            if path.suffix == ".csv":
-                df = pl.read_csv(path)
-            elif path.suffix in (".parquet", ".pq"):
-                df = pl.read_parquet(path)
-            else:
-                console.print(f"  [red]Unsupported file type: {path.suffix} (use .parquet or .csv)[/]")
-                return
-            tables[name] = df
-            console.print(f"  [green]Loaded [bold]{name}[/] from {filepath} ({df.height:,} rows x {df.width} cols)[/]")
-        except Exception as exc:
-            console.print(f"  [red]Failed to load {filepath}: {exc}[/]")
-            return
+        if path.is_dir():
+            # Load all parquet/csv files in directory
+            found = sorted(path.glob("*.parquet")) + sorted(path.glob("*.pq")) + sorted(path.glob("*.csv"))
+            if not found:
+                console.print(f"  [yellow]No parquet/csv files found in {filepath}[/]")
+                continue
+            for f in found:
+                _load_file(f, f.stem, tables)
+        else:
+            _load_file(path, name or path.stem, tables)
 
     if tables:
         interactive_sql(tables, row_limit=args.limit)
