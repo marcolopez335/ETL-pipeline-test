@@ -250,3 +250,73 @@ def print_pipeline_complete(name: str, elapsed: float) -> None:
         f"  [green bold]\\u2713 {name} complete[/]  [dim]({elapsed:.1f}s)[/]"
     )
     console.print()
+
+
+def interactive_sql(tables: dict) -> None:
+    """Interactive SQL shell over Polars DataFrames using pl.SQLContext."""
+    import polars as pl
+
+    ctx = pl.SQLContext(tables)
+    table_names = list(tables.keys())
+
+    console.print()
+    console.rule("[bold cyan]Interactive SQL Query Mode[/]", style="cyan")
+    console.print()
+    console.print(f"  [cyan]Available tables:[/] {', '.join(f'[bold]{t}[/]' for t in table_names)}")
+    for name, df in tables.items():
+        console.print(f"    [dim]{name}: {df.height:,} rows x {df.width} cols[/]")
+    console.print()
+    console.print("  [dim]Type SQL queries, 'tables' to list tables, 'schema <table>' for columns, or 'exit' to quit.[/]")
+    console.print()
+
+    while True:
+        try:
+            query = console.input("[bold cyan]sql>[/] ").strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print()
+            break
+
+        if not query:
+            continue
+        if query.lower() in ("exit", "quit", "q"):
+            break
+        if query.lower() == "tables":
+            for name, df in tables.items():
+                console.print(f"  [bold]{name}[/]  [dim]({df.height:,} rows x {df.width} cols)[/]")
+            continue
+        if query.lower().startswith("schema"):
+            parts = query.split(None, 1)
+            tbl = parts[1] if len(parts) > 1 else None
+            if tbl and tbl in tables:
+                for col_name, dtype in tables[tbl].schema.items():
+                    console.print(f"  [white]{col_name:<35}[/] [yellow]{dtype}[/]")
+            else:
+                console.print(f"  [red]Unknown table. Available: {', '.join(table_names)}[/]")
+            continue
+
+        try:
+            result = ctx.execute(query).collect()
+            if result.height == 0:
+                console.print("  [dim]No results.[/]")
+            else:
+                total_rows = result.height
+                has_explicit_limit = "limit" in query.lower()
+                display_limit = 100
+                truncated = not has_explicit_limit and total_rows > display_limit
+                display = result.head(display_limit) if truncated else result
+
+                # Build a rich table for display
+                table = Table(box=box.SIMPLE, header_style="bold cyan", border_style="dim", show_lines=False)
+                for col in display.columns:
+                    table.add_column(col)
+                for row in display.iter_rows():
+                    table.add_row(*[str(v) if v is not None else "[dim]-[/]" for v in row])
+                console.print(table)
+                if truncated:
+                    console.print(f"  [dim]Showing first {display_limit} of {total_rows:,} rows — use LIMIT to control[/]")
+                else:
+                    console.print(f"  [dim]{total_rows:,} row(s)[/]")
+        except Exception as exc:
+            console.print(f"  [red]Error: {exc}[/]")
+
+        console.print()

@@ -160,7 +160,7 @@ def _calc_steps(publish: bool) -> int:
     return 8 if publish else 6
 
 
-def run(config: dict, publish: bool = False):
+def run(config: dict, publish: bool = False) -> tuple[pl.DataFrame, pl.DataFrame]:
     cfg = config["epics"]
     cache_path = CACHE_DIR / cfg["cache_filename"]
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
@@ -209,3 +209,4 @@ def run(config: dict, publish: bool = False):
     elapsed = time.time() - start
     logger.info("Epics pipeline complete")
     print_pipeline_complete("Epics", elapsed)
+    return df, df_acrp

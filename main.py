@@ -2,7 +2,7 @@ import argparse
 from pathlib import Path
 from common.logging import get_logger, setup_logging, INFO
 from conversion.shared import test_connection, load_config
-from conversion.console import print_header, print_success, print_error, console
+from conversion.console import print_header, print_success, print_error, interactive_sql, console
 from conversion import stories_table as stories
 from conversion import epics_table as epics
 
@@ -23,6 +23,7 @@ def main():
     parser.add_argument("--update-cache", action="store_true", help="Update history caches only (no hyper export)")
     parser.add_argument("--test", action="store_true", help="Test the database connection")
     parser.add_argument("--publish", action="store_true", help="Publish hyper files to Tableau after export")
+    parser.add_argument("--query", action="store_true", help="Open interactive SQL shell after pipeline runs")
     args = parser.parse_args()
 
     config = load_config()
@@ -53,14 +54,22 @@ def main():
             epics.run_update_cache(config)
         return
 
+    sql_tables = {}
+
     if run_all or args.stories:
-        stories.run(config, publish=args.publish)
+        df_stories = stories.run(config, publish=args.publish)
+        sql_tables["stories"] = df_stories
 
     if run_all or args.epics:
-        epics.run(config, publish=args.publish)
+        df_epics, df_acrp = epics.run(config, publish=args.publish)
+        sql_tables["epics"] = df_epics
+        sql_tables["acrp"] = df_acrp
 
     console.rule("[bold green]Done[/]", style="green")
     console.print()
+
+    if args.query and sql_tables:
+        interactive_sql(sql_tables)
 
 
 if __name__ == "__main__":

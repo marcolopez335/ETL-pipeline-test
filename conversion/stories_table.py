@@ -79,7 +79,7 @@ def run_update_cache(config: dict):
     logger.info("Stories cache update complete")
 
 
-def run(config: dict, publish: bool = False):
+def run(config: dict, publish: bool = False) -> pl.DataFrame:
     cfg = config["stories"]
     cache_path = CACHE_DIR / cfg["cache_filename"]
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
@@ -123,3 +123,4 @@ def run(config: dict, publish: bool = False):
     elapsed = time.time() - start
     logger.info("Stories pipeline complete")
     print_pipeline_complete("Stories", elapsed)
+    return df
