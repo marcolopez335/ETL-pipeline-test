@@ -3,7 +3,8 @@ from pathlib import Path
 import polars as pl
 from common.logging import get_logger, setup_logging, INFO
 from conversion.shared import test_connection, load_config, CACHE_DIR
-from conversion.console import print_header, print_success, print_error, print_info, interactive_sql, console
+from conversion.console import print_header, print_success, print_error, print_info, console
+from sql_shell import interactive_sql
 from conversion import stories_table as stories
 from conversion import epics_table as epics
 
