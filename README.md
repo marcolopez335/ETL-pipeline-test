@@ -12,6 +12,7 @@ A production ETL pipeline that extracts Jira backlog data from a Tibco database 
 - [Usage](#usage)
 - [Pipelines](#pipelines)
 - [Interactive SQL Query Mode](#interactive-sql-query-mode)
+- [Synthetic Snapshots](#synthetic-snapshots)
 - [Architecture](#architecture)
 - [Features](#features)
 
@@ -25,10 +26,15 @@ ETL-pipeline-test/
 ├── config.yaml                          # Configuration (database, Tableau, paths)
 ├── requirements.txt                     # Python dependencies
 ├── conversion/
-│   ├── shared.py                        # Shared utilities (query, cache, export, publish)
-│   ├── console.py                       # Rich console output (progress, tables, SQL shell)
+│   ├── shared.py                        # Shared utilities (query, cache, export, snapshots)
+│   ├── console.py                       # Rich console output (progress, tables)
 │   ├── stories_table.py                 # Stories pipeline
 │   └── epics_table.py                   # Epics pipeline + ACRP + sprint range
+├── sql_shell/                           # Standalone interactive SQL shell (reusable)
+│   ├── __init__.py
+│   ├── __main__.py                      # CLI: python -m sql_shell data.parquet
+│   ├── shell.py                         # REPL loop, command parsing
+│   └── display.py                       # Rich table rendering
 ├── sql/                                 # SQL query files (CTE hierarchy)
 ├── schemas/                             # Column dtype definitions
 ├── cache/                               # Parquet history caches (auto-generated)
@@ -81,6 +87,8 @@ backup:
 | `python main.py --test` | Test database connection |
 | `python main.py --epics --query` | Run epics then open SQL shell |
 | `python main.py --query` | Run all pipelines then open SQL shell |
+| `python main.py --query-only` | Open SQL shell from cache (no pipeline run) |
+| `python main.py --query-only --epics` | Open SQL shell with epics cache only |
 
 Flags can be combined: `python main.py --stories --publish --query`
 
@@ -89,20 +97,22 @@ Flags can be combined: `python main.py --stories --publish --query`
 ### Stories
 
 1. Fetch summary data and history snapshots from Tibco
-2. Union summary with incremental history cache
-3. Join with epics lookup data
-4. Apply transformations (`LAST_UPDATED`, `PROJECT_NAME_VERSION`, column renaming)
-5. Export to `STORIES.hyper`
-6. Optionally publish to Tableau Server
+2. Update incremental history cache
+3. Fill missing Monday snapshots (synthetic)
+4. Union summary with history, fetch and join epics lookup
+5. Apply transformations (`LAST_UPDATED`, `PROJECT_NAME_VERSION`, column renaming)
+6. Export to `STORIES.hyper`
+7. Optionally publish to Tableau Server
 
 ### Epics
 
 1. Fetch summary data and history snapshots from Tibco
-2. Union summary with incremental history cache
-3. Apply transformations (`LAST_UPDATED`, sprint version parsing, `MIN_SPRINT`/`MAX_SPRINT`)
-4. Export to `EPICS.hyper`
-5. Build ACRP release range view and export to `EPICS_ACRP.hyper`
-6. Optionally publish both hyper files to Tableau Server
+2. Update incremental history cache
+3. Fill missing Monday snapshots (synthetic)
+4. Union summary with history, apply transformations (`LAST_UPDATED`, sprint parsing, `MIN_SPRINT`/`MAX_SPRINT`)
+5. Export to `EPICS.hyper`
+6. Build ACRP release range view and export to `EPICS_ACRP.hyper`
+7. Optionally publish both hyper files to Tableau Server
 
 ### ACRP (Active Capability Release Plan)
 
@@ -140,11 +150,55 @@ sql> SELECT FEATURE_KEY, MIN_SPRINT, MAX_SPRINT FROM epics WHERE PROGRAM_INCREME
 | Any SQL query | Runs against in-memory DataFrames |
 | `tables` | List available tables and row counts |
 | `schema <table>` | Show column names and dtypes |
+| `describe <table>` | Column stats (nulls, uniques, min/max) |
+| `sample <table> [n]` | Show n random rows (default: 10) |
+| `count <table>` | Quick row count |
+| `export csv <file>` | Export last result to CSV |
+| `export parquet <file>` | Export last result to Parquet |
+| `save <name>` | Save last result as a new queryable table |
+| `history` | Show query history |
+| `!<n>` | Re-run query #n from history |
 | `exit` | Exit the SQL shell |
 
 **Available tables:** `stories`, `epics`, `acrp` (depending on which pipelines ran)
 
 > Results are capped at 100 rows by default. Use `LIMIT` to override.
+
+### Standalone SQL Shell
+
+The `sql_shell` package can also be used independently — no pipeline required:
+
+```bash
+# Load individual files
+python -m sql_shell data.parquet
+
+# Load all parquet/CSV files from a directory
+python -m sql_shell ./cache/
+
+# Custom table names
+python -m sql_shell --name epics epics.parquet --name stories stories.parquet
+```
+
+See [`sql_shell/README.md`](sql_shell/README.md) for full documentation.
+
+## Synthetic Snapshots
+
+The pipeline checks the last 4 Mondays and fills any gaps in the history cache automatically. If the database is missing a Monday snapshot, the pipeline synthesizes one from the current summary data:
+
+- Rows are stamped with the missing Monday's `SNAPSHOT_DATE` and `IS_SYNTHETIC = True`
+- When the database later provides the real snapshot, the next pipeline run's anti-join replaces the synthetic rows with real data automatically
+- This ensures Tableau reports always have continuous weekly data, even when the source database has gaps
+
+```
+History cache:  Feb 23 ✓  |  Mar 2 ✓  |  Mar 9 ✗  |  Mar 16 ✗
+                                          ↓              ↓
+After fill:     Feb 23 ✓  |  Mar 2 ✓  |  Mar 9 ★  |  Mar 16 ★
+                                        (synthetic)   (synthetic)
+
+Next run (DB has Mar 9 now):
+                Feb 23 ✓  |  Mar 2 ✓  |  Mar 9 ✓  |  Mar 16 ★
+                                        (replaced)   (synthetic)
+```
 
 ## Architecture
 
@@ -155,6 +209,9 @@ sql> SELECT FEATURE_KEY, MIN_SPRINT, MAX_SPRINT FROM epics WHERE PROGRAM_INCREME
                           │               │
                     summary data    history cache
                           │          (scan_parquet)
+                          │               │
+                          │    fill_missing_snapshots()
+                          │     (synthesize missing Mondays)
                           │               │
                           └──── union ────┘
                                   │
@@ -174,8 +231,9 @@ sql> SELECT FEATURE_KEY, MIN_SPRINT, MAX_SPRINT FROM epics WHERE PROGRAM_INCREME
 ## Features
 
 - **Polars** — Multi-threaded DataFrame operations, native anti-joins, and Arrow-based memory for fast processing at 4M+ rows
-- **Lazy caching** — History data cached as parquet; `scan_parquet` lazily reads only the rows needed for the incremental merge, avoiding full cache loads into memory
-- **Interactive SQL** — Query final DataFrames with standard SQL via `--query` for debugging and data validation
+- **Lazy caching** — History data cached as `.parquet`; `scan_parquet` lazily reads only the rows needed for the incremental merge, avoiding full cache loads into memory
+- **Synthetic snapshots** — Automatically fills missing Monday snapshots from summary data; replaced by real data on the next pipeline run
+- **Interactive SQL** — Query final DataFrames with standard SQL via `--query` for debugging and data validation; also available standalone via `python -m sql_shell`
 - **Sprint parsing** — Extracts sprint versions from names, handles IP sprints, and computes min/max per snapshot and program increment using numeric sort keys
 - **Automatic backups** — Previous hyper files are timestamped and saved before overwrite, with configurable rotation (default: keep 5)
 - **Summary statistics** — Each step logs a formatted table with column dtypes, null counts/percentages, unique values, min/max, and memory usage
