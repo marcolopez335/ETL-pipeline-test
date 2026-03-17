@@ -6,6 +6,7 @@ from schemas.datatypes import EXPECTED_DTYPES_EPICS
 from conversion.shared import (
     CACHE_DIR, run_query, clean_dtypes, update_history, union_data,
     export_hyper, load_config, log_dataframe_summary, publish_hyper,
+    fill_missing_snapshots,
 )
 from conversion.console import (
     print_header, step_spinner, print_info, print_pipeline_complete,
@@ -157,7 +158,7 @@ def run_update_cache(config: dict):
 
 
 def _calc_steps(publish: bool) -> int:
-    return 8 if publish else 6
+    return 9 if publish else 7
 
 
 def run(config: dict, publish: bool = False) -> tuple[pl.DataFrame, pl.DataFrame]:
@@ -184,26 +185,29 @@ def run(config: dict, publish: bool = False) -> tuple[pl.DataFrame, pl.DataFrame
         df_history = clean_dtypes(df_history, EXPECTED_DTYPES_EPICS)
     log_dataframe_summary(df_history, "Epics History")
 
-    with step_spinner(3, total, "Unioning & transforming"):
+    with step_spinner(3, total, "Filling missing snapshots"):
+        df_history = fill_missing_snapshots(df_summary, df_history, cfg["key_column"])
+
+    with step_spinner(4, total, "Unioning & transforming"):
         df = union_data(df_summary, df_history)
         df = data_functions(df)
 
     log_dataframe_summary(df, "Epics Final")
 
-    with step_spinner(4, total, "Exporting EPICS.hyper"):
+    with step_spinner(5, total, "Exporting EPICS.hyper"):
         export_hyper(df, hyper_path, "Epics", config)
 
-    with step_spinner(5, total, "Building ACRP release range"):
+    with step_spinner(6, total, "Building ACRP release range"):
         df_acrp = build_acrp(df)
     log_dataframe_summary(df_acrp, "Epics ACRP")
 
-    with step_spinner(6, total, "Exporting EPICS_ACRP.hyper"):
+    with step_spinner(7, total, "Exporting EPICS_ACRP.hyper"):
         export_hyper(df_acrp, acrp_hyper_path, "Epics_ACRP", config)
 
     if publish:
-        with step_spinner(7, total, "Publishing EPICS to Tableau"):
+        with step_spinner(8, total, "Publishing EPICS to Tableau"):
             publish_hyper(hyper_path, "Epics", config)
-        with step_spinner(8, total, "Publishing EPICS_ACRP to Tableau"):
+        with step_spinner(9, total, "Publishing EPICS_ACRP to Tableau"):
             publish_hyper(acrp_hyper_path, "Epics_ACRP", config)
 
     elapsed = time.time() - start

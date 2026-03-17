@@ -1,5 +1,5 @@
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import polars as pl
 import pandas as pd
@@ -284,6 +284,92 @@ def update_history(
 
     write_history_cache(updated, cache_path)
     return updated
+
+
+def get_last_n_mondays(n: int, from_date: datetime = None) -> list[datetime]:
+    """Get the last n Mondays up to and including the most recent Monday."""
+    if from_date is None:
+        from_date = datetime.now()
+    days_since_monday = from_date.weekday()  # 0=Monday
+    most_recent_monday = from_date - timedelta(days=days_since_monday)
+    most_recent_monday = most_recent_monday.replace(hour=0, minute=0, second=0, microsecond=0)
+    return [most_recent_monday - timedelta(weeks=i) for i in range(n)]
+
+
+def fill_missing_snapshots(
+    df_summary: pl.DataFrame,
+    df_history: pl.DataFrame,
+    key_col: str,
+    n_mondays: int = 4,
+) -> pl.DataFrame:
+    """Fill missing Monday snapshots in history using summary data.
+
+    Checks the last n_mondays Mondays. For any Monday where no snapshot
+    exists in df_history, creates a synthetic snapshot from df_summary
+    with SNAPSHOT_DATE set to that Monday and IS_SYNTHETIC = True.
+
+    When the database later provides the real snapshot, the cache update's
+    anti-join will replace the synthetic row automatically.
+    """
+    mondays = get_last_n_mondays(n_mondays)
+
+    # Get existing snapshot dates from history
+    existing_dates = set()
+    if "SNAPSHOT_DATE" in df_history.columns and df_history.height > 0:
+        dates = df_history.select(
+            pl.col("SNAPSHOT_DATE").cast(pl.Date)
+        ).unique().to_series().to_list()
+        existing_dates = {d for d in dates if d is not None}
+
+    # Find missing Mondays
+    missing_mondays = [m for m in mondays if m.date() not in existing_dates]
+
+    if not missing_mondays:
+        logger.info(f"No missing snapshots in the last {n_mondays} Mondays")
+        return df_history
+
+    logger.info(f"Found {len(missing_mondays)} missing Monday snapshot(s)")
+    for m in sorted(missing_mondays):
+        logger.info(f"  Missing: {m.strftime('%Y-%m-%d')} (Monday)")
+
+    # Build synthetic snapshots from summary data
+    summary_cols = [c for c in df_summary.columns if c not in ("SNAPSHOT_DATE", "IS_SYNTHETIC")]
+    base = df_summary.select(summary_cols)
+
+    synthetic_frames = []
+    for monday in sorted(missing_mondays):
+        snapshot = base.with_columns([
+            pl.lit(monday).alias("SNAPSHOT_DATE"),
+            pl.lit(True).alias("IS_SYNTHETIC"),
+        ])
+        synthetic_frames.append(snapshot)
+        logger.info(f"  Synthesized {snapshot.height} rows for {monday.strftime('%Y-%m-%d')}")
+
+    synthetic = pl.concat(synthetic_frames)
+
+    # Add IS_SYNTHETIC=False to history if column doesn't exist
+    if "IS_SYNTHETIC" not in df_history.columns:
+        df_history = df_history.with_columns(pl.lit(False).alias("IS_SYNTHETIC"))
+
+    # Align schemas and concat
+    for col in synthetic.columns:
+        if col not in df_history.columns:
+            dtype = synthetic[col].dtype
+            df_history = df_history.with_columns(
+                pl.lit(None).cast(dtype if dtype != pl.Null else pl.Utf8).alias(col)
+            )
+    for col in df_history.columns:
+        if col not in synthetic.columns:
+            dtype = df_history[col].dtype
+            synthetic = synthetic.with_columns(
+                pl.lit(None).cast(dtype if dtype != pl.Null else pl.Utf8).alias(col)
+            )
+
+    synthetic = synthetic.select(df_history.columns)
+    combined = pl.concat([df_history, synthetic])
+    logger.info(f"History: {df_history.height} -> {combined.height} rows (+{synthetic.height} synthetic)")
+
+    return combined
 
 
 def union_data(df_summary: pl.DataFrame, df_history: pl.DataFrame) -> pl.DataFrame:

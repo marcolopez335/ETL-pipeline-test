@@ -7,6 +7,7 @@ from schemas.datatypes import EXPECTED_DTYPES_STORIES
 from conversion.shared import (
     CACHE_DIR, run_query, clean_dtypes, update_history, union_data,
     export_hyper, load_config, log_dataframe_summary, publish_hyper,
+    fill_missing_snapshots,
 )
 from conversion.console import (
     print_header, step_spinner, print_info, print_pipeline_complete,
@@ -22,8 +23,8 @@ setup_logging(
 )
 logger = get_logger(__name__)
 
-TOTAL_STEPS_BASE = 5
-TOTAL_STEPS_PUBLISH = 6
+TOTAL_STEPS_BASE = 6
+TOTAL_STEPS_PUBLISH = 7
 
 
 def fetch_summary_full(config: dict) -> pl.DataFrame:
@@ -102,22 +103,25 @@ def run(config: dict, publish: bool = False) -> pl.DataFrame:
         df_history = clean_dtypes(df_history, EXPECTED_DTYPES_STORIES)
     log_dataframe_summary(df_history, "Stories History")
 
-    with step_spinner(3, total, "Fetching epics"):
+    with step_spinner(3, total, "Filling missing snapshots"):
+        df_history = fill_missing_snapshots(df_summary, df_history, cfg["key_column"])
+
+    with step_spinner(4, total, "Fetching epics"):
         stories = union_data(df_summary, df_history)
         epics = fetch_epics_full(config)
         epics = clean_dtypes(epics, EXPECTED_DTYPES_STORIES)
 
-    with step_spinner(4, total, "Joining & transforming"):
+    with step_spinner(5, total, "Joining & transforming"):
         df = join_stories_data(stories, epics)
         df = data_functions(df)
 
     log_dataframe_summary(df, "Stories Final")
 
-    with step_spinner(5, total, "Exporting hyper"):
+    with step_spinner(6, total, "Exporting hyper"):
         export_hyper(df, hyper_path, "Stories", config)
 
     if publish:
-        with step_spinner(6, total, "Publishing to Tableau"):
+        with step_spinner(7, total, "Publishing to Tableau"):
             publish_hyper(hyper_path, "Stories", config)
 
     elapsed = time.time() - start
