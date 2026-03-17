@@ -55,6 +55,12 @@ def data_functions(df: pl.DataFrame) -> pl.DataFrame:
     df = df.with_columns([
         pl.lit(now).alias("LAST_UPDATED"),
         (pl.col("PROJECT_NAME") + " " + pl.col("FIX_VERSION")).alias("PROJECT_NAME_VERSION"),
+        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(r"(\d{2}\.\d.\w+)").alias("SPRINT_NAME_ALT"),
+        pl.when(pl.col("SNAPSHOT_DATE").is_null())
+          .then(pl.lit(now))
+          .otherwise(pl.col("SNAPSHOT_DATE"))
+          .alias("SNAPSHOT_DATE_ALT"),
+        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(r"(\d{2}\.\d.\w+)").str.slice(0, 4).alias("PI_FROM_SPRINT"),
     ])
 
     # Rename columns: SNAKE_CASE -> Title Case
