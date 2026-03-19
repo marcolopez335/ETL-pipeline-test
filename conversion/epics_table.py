@@ -248,6 +248,9 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     log_dataframe_summary(df_agile_history, "Agile History")
 
     with step_spinner(5, total, "Joining agile data"):
+        # Ensure SNAPSHOT_DATE is Date on both sides before joining
+        # (fill_missing_snapshots may produce Datetime from python datetime literals)
+        df_history = df_history.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
         # Join agile history onto epic history (by FEATURE_KEY + SNAPSHOT_DATE)
         df_history = join_agile(df_history, df_agile_history, has_snapshot=True)
         # Join agile summary onto epic summary (by FEATURE_KEY only, no snapshot)
