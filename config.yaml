@@ -13,7 +13,17 @@ backup:
   enabled: true
   max_backups: 5
 
+cache:
+  backup_enabled: true
+  max_cache_backups: 3
+  min_retention_pct: 0.98
+
+snapshots:
+  day_of_week: 0        # 0=Monday, 1=Tuesday, ..., 6=Sunday
+  lookback_weeks: 4
+
 stories:
+  table_id: "AMMM.Stories.v1.py"
   hyper_filename: "STORIES.hyper"
   cache_filename: "stories_history_cache.parquet"
   key_column: "STORY_NUMBER"
@@ -22,13 +32,9 @@ stories:
   sql_summary: "Asum.sql"
   sql_epics: "EsumEhist.sql"
 
-tableau:
-  server_url: ""
-  site_id: ""
-  project_name: ""
-  overwrite: true
-
 epics:
+  table_id: "AMMM.Epics.v1.py"
+  acrp_table_id: "AMMM.Epics_ACRP.v1.py"
   hyper_filename: "EPICS.hyper"
   acrp_hyper_filename: "EPICS_ACRP.hyper"
   cache_filename: "epics_history_cache.parquet"
@@ -36,3 +42,15 @@ epics:
   sql_history_full: "EpicHistory.sql"
   sql_history_recent: "EpicHistory_recent.sql"
   sql_summary: "EpicSummary.sql"
+
+tableau:
+  tst:
+    server_url: ""
+    site_id: ""
+    project_name: ""
+    overwrite: true
+  prd:
+    server_url: ""
+    site_id: ""
+    project_name: ""
+    overwrite: true
