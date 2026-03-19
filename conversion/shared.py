@@ -105,11 +105,14 @@ def log_dataframe_summary(df: pl.DataFrame, label: str) -> None:
     total_mem = df.estimated_size()
     logger.info(f"--- {label} Summary ---")
     logger.info(f"  Rows: {df.height}  Columns: {df.width}  Memory: {total_mem:,} bytes")
+
+    # Compute stats once and share with both logger and console display
     null_counts = df.null_count()
     try:
         n_unique = df.select(pl.all().n_unique())
     except Exception:
         n_unique = None
+
     total_nulls = 0
     for col in df.columns:
         null_count = null_counts[col][0]
@@ -128,7 +131,8 @@ def log_dataframe_summary(df: pl.DataFrame, label: str) -> None:
     total_null_pct = (total_nulls / total_cells * 100) if total_cells > 0 else 0.0
     logger.info(f"  Total null %: {total_null_pct:.1f}%")
 
-    print_polars_summary(df, label)
+    # Pass pre-computed stats so print_polars_summary doesn't recompute n_unique
+    print_polars_summary(df, label, null_counts=null_counts, n_unique=n_unique)
 
 
 def backup_file(file_path: Path, config: dict) -> None:
@@ -205,30 +209,37 @@ def _align_schemas(df1: pl.DataFrame, df2: pl.DataFrame) -> tuple[pl.DataFrame, 
     """Align two DataFrames to the same columns and types before concat."""
     all_cols = dict.fromkeys(df1.columns + df2.columns)
 
+    # Batch casts/additions to avoid creating a new DataFrame per column
+    df1_casts = []
+    df2_casts = []
+
     for col in all_cols:
         if col in df1.columns and col in df2.columns:
             if df1[col].dtype == pl.Null and df2[col].dtype == pl.Null:
-                # Both Null — cast both to Utf8 so downstream doesn't choke
-                df1 = df1.with_columns(pl.col(col).cast(pl.Utf8))
-                df2 = df2.with_columns(pl.col(col).cast(pl.Utf8))
+                df1_casts.append(pl.col(col).cast(pl.Utf8))
+                df2_casts.append(pl.col(col).cast(pl.Utf8))
             elif df1[col].dtype != df2[col].dtype:
                 if df1[col].dtype == pl.Null:
-                    df1 = df1.with_columns(pl.col(col).cast(df2[col].dtype))
+                    df1_casts.append(pl.col(col).cast(df2[col].dtype))
                 elif df2[col].dtype == pl.Null:
-                    df2 = df2.with_columns(pl.col(col).cast(df1[col].dtype))
+                    df2_casts.append(pl.col(col).cast(df1[col].dtype))
                 else:
-                    # Both non-null but different — cast to supertype
                     try:
                         super_type = pl.datatypes.unify_dtypes([df1[col].dtype, df2[col].dtype])
-                        df1 = df1.with_columns(pl.col(col).cast(super_type, strict=False))
-                        df2 = df2.with_columns(pl.col(col).cast(super_type, strict=False))
+                        df1_casts.append(pl.col(col).cast(super_type, strict=False))
+                        df2_casts.append(pl.col(col).cast(super_type, strict=False))
                     except Exception:
-                        df1 = df1.with_columns(pl.col(col).cast(pl.Utf8, strict=False))
-                        df2 = df2.with_columns(pl.col(col).cast(pl.Utf8, strict=False))
+                        df1_casts.append(pl.col(col).cast(pl.Utf8, strict=False))
+                        df2_casts.append(pl.col(col).cast(pl.Utf8, strict=False))
         elif col not in df1.columns:
-            df1 = df1.with_columns(pl.lit(None).cast(_safe_dtype(df2[col].dtype)).alias(col))
+            df1_casts.append(pl.lit(None).cast(_safe_dtype(df2[col].dtype)).alias(col))
         else:
-            df2 = df2.with_columns(pl.lit(None).cast(_safe_dtype(df1[col].dtype)).alias(col))
+            df2_casts.append(pl.lit(None).cast(_safe_dtype(df1[col].dtype)).alias(col))
+
+    if df1_casts:
+        df1 = df1.with_columns(df1_casts)
+    if df2_casts:
+        df2 = df2.with_columns(df2_casts)
 
     # Ensure same column order
     df2 = df2.select(df1.columns)
@@ -411,20 +422,7 @@ def fill_missing_snapshots(
         df_history = df_history.with_columns(pl.lit(False).alias("IS_SYNTHETIC"))
 
     # Align schemas and concat
-    for col in synthetic.columns:
-        if col not in df_history.columns:
-            dtype = synthetic[col].dtype
-            df_history = df_history.with_columns(
-                pl.lit(None).cast(dtype if dtype != pl.Null else pl.Utf8).alias(col)
-            )
-    for col in df_history.columns:
-        if col not in synthetic.columns:
-            dtype = df_history[col].dtype
-            synthetic = synthetic.with_columns(
-                pl.lit(None).cast(dtype if dtype != pl.Null else pl.Utf8).alias(col)
-            )
-
-    synthetic = synthetic.select(df_history.columns)
+    df_history, synthetic = _align_schemas(df_history, synthetic)
     combined = pl.concat([df_history, synthetic])
     logger.info(f"History: {df_history.height} -> {combined.height} rows (+{synthetic.height} synthetic)")
 

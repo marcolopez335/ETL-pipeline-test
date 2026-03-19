@@ -69,7 +69,7 @@ def step_spinner(step: int, total: int, message: str):
     print_step(step, total, message, f"{elapsed:.1f}s")
 
 
-def print_polars_summary(df, label: str) -> None:
+def print_polars_summary(df, label: str, null_counts=None, n_unique=None) -> None:
     import polars as pl
 
     height = df.height
@@ -93,12 +93,14 @@ def print_polars_summary(df, label: str) -> None:
     table.add_column("Max", style="dim")
     table.add_column("Memory", justify="right", style="dim")
 
-    # Pre-compute stats in one pass
-    null_counts = df.null_count()
-    try:
-        n_unique = df.select(pl.all().n_unique())
-    except Exception:
-        n_unique = None
+    # Use pre-computed stats if provided, otherwise compute them
+    if null_counts is None:
+        null_counts = df.null_count()
+    if n_unique is None:
+        try:
+            n_unique = df.select(pl.all().n_unique())
+        except Exception:
+            pass
 
     total_nulls = 0
     for col in df.columns:
