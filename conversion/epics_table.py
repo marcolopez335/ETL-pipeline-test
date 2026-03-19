@@ -109,7 +109,23 @@ def _compute_sprint_range(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def data_functions(df: pl.DataFrame) -> pl.DataFrame:
+def fetch_sprint_range(config: dict) -> pl.DataFrame:
+    """Fetch distinct sprint names per snapshot+PI, compute version range, return lookup."""
+    cfg = config["epics"]
+    df = run_query(cfg["sql_agile_sprint_range"], database=config["database"]["name"])
+    if "SNAPSHOT_DATE" in df.columns:
+        df = df.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
+    # Compute MIN_SPRINT / MAX_SPRINT per SNAPSHOT_DATE + PROGRAM_INCREMENT
+    df = _compute_sprint_range(df)
+    # Collapse to one row per partition with the range columns
+    sprint_lookup = df.select(
+        SPRINT_PARTITION + ["MIN_SPRINT", "MAX_SPRINT"]
+    ).unique()
+    logger.info(f"Sprint range lookup: {sprint_lookup.height} rows")
+    return sprint_lookup
+
+
+def data_functions(df: pl.DataFrame, sprint_lookup: pl.DataFrame) -> pl.DataFrame:
     """Apply all post-union transformations."""
     from datetime import datetime
 
@@ -120,8 +136,8 @@ def data_functions(df: pl.DataFrame) -> pl.DataFrame:
 
     df = df.with_columns(pl.lit(now).alias("LAST_UPDATED"))
 
-    # Sprint range (MIN_SPRINT / MAX_SPRINT per snapshot + PI)
-    df = _compute_sprint_range(df)
+    # Join sprint range lookup (MIN_SPRINT / MAX_SPRINT per snapshot + PI)
+    df = df.join(sprint_lookup, on=SPRINT_PARTITION, how="left")
 
     return df
 
@@ -145,8 +161,8 @@ def fetch_agile(config: dict, history: bool = True) -> pl.DataFrame:
 def join_agile(df: pl.DataFrame, df_agile: pl.DataFrame, has_snapshot: bool = True) -> pl.DataFrame:
     """Join agile sprint data onto epics at the feature level.
 
-    Agile data is aggregated per FEATURE_ID (+ SNAPSHOT_DATE for history),
-    so this is a many-to-one join from epics — no fan-out.
+    Agile data is aggregated per FEATURE_ID + PROGRAM_INCREMENT (+ SNAPSHOT_DATE
+    for history), so this is a many-to-one join from epics — no fan-out.
     """
     if has_snapshot:
         return df.join(
@@ -242,14 +258,14 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     with step_spinner(3, total, "Filling missing snapshots"):
         df_history = fill_missing_snapshots(df_summary, df_history, cfg["key_column"], config=config)
 
-    with step_spinner(4, total, "Fetching agile sprint data"):
+    with step_spinner(4, total, "Fetching agile data"):
         df_agile_history = fetch_agile(config, history=True)
         df_agile_summary = fetch_agile(config, history=False)
+        sprint_lookup = fetch_sprint_range(config)
     log_dataframe_summary(df_agile_history, "Agile History")
 
     with step_spinner(5, total, "Joining agile data"):
         # Ensure SNAPSHOT_DATE is Date on both sides before joining
-        # (fill_missing_snapshots may produce Datetime from python datetime literals)
         df_history = df_history.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
         # Join agile history onto epic history (by FEATURE_KEY + SNAPSHOT_DATE)
         df_history = join_agile(df_history, df_agile_history, has_snapshot=True)
@@ -258,7 +274,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
 
     with step_spinner(6, total, "Unioning & transforming"):
         df = union_data(df_summary, df_history)
-        df = data_functions(df)
+        df = data_functions(df, sprint_lookup)
 
     log_dataframe_summary(df, "Epics Final")
 
