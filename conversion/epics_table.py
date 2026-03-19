@@ -131,6 +131,37 @@ def fetch_summary_full(config: dict) -> pl.DataFrame:
     return run_query(cfg["sql_summary"], database=config["database"]["name"])
 
 
+def fetch_agile(config: dict, history: bool = True) -> pl.DataFrame:
+    """Fetch agile sprint data (history or summary) as a separate query."""
+    cfg = config["epics"]
+    sql_key = "sql_agile_history" if history else "sql_agile_summary"
+    return run_query(cfg[sql_key], database=config["database"]["name"])
+
+
+def join_agile(df: pl.DataFrame, df_agile: pl.DataFrame, has_snapshot: bool = True) -> pl.DataFrame:
+    """Join agile sprint data onto epics at the feature level.
+
+    Agile data is aggregated per FEATURE_ID (+ SNAPSHOT_DATE for history),
+    so this is a many-to-one join from epics — no fan-out.
+    """
+    if has_snapshot:
+        return df.join(
+            df_agile,
+            left_on=["FEATURE_KEY", "SNAPSHOT_DATE"],
+            right_on=["FEATURE_ID", "SNAPSHOT_DATE"],
+            how="left",
+            suffix="_agile",
+        )
+    else:
+        return df.join(
+            df_agile,
+            left_on=["FEATURE_KEY"],
+            right_on=["FEATURE_ID"],
+            how="left",
+            suffix="_agile",
+        )
+
+
 def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
     # Filter: null snapshot date AND row is a feature or subcapability level
     filtered = df.filter(
@@ -175,7 +206,7 @@ def run_update_cache(config: dict, force: bool = False):
 
 
 def _calc_steps(publish: bool) -> int:
-    return 9 if publish else 7
+    return 10 if publish else 9
 
 
 def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
@@ -190,12 +221,12 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     print_header("Epics Pipeline (Polars)")
     logger.info("Starting epics pipeline")
 
-    with step_spinner(1, total, "Fetching summary"):
+    with step_spinner(1, total, "Fetching epic summary"):
         df_summary = fetch_summary_full(config)
         df_summary = clean_dtypes(df_summary, EXPECTED_DTYPES_EPICS)
     log_dataframe_summary(df_summary, "Epics Summary")
 
-    with step_spinner(2, total, "Updating history cache"):
+    with step_spinner(2, total, "Updating epic history cache"):
         df_history = update_history(
             cfg["sql_history_full"], cfg["sql_history_recent"],
             cfg["key_column"], cache_path,
@@ -207,26 +238,36 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     with step_spinner(3, total, "Filling missing snapshots"):
         df_history = fill_missing_snapshots(df_summary, df_history, cfg["key_column"], config=config)
 
-    with step_spinner(4, total, "Unioning & transforming"):
+    with step_spinner(4, total, "Fetching agile sprint data"):
+        df_agile_history = fetch_agile(config, history=True)
+        df_agile_summary = fetch_agile(config, history=False)
+    log_dataframe_summary(df_agile_history, "Agile History")
+
+    with step_spinner(5, total, "Joining agile data"):
+        # Join agile history onto epic history (by FEATURE_KEY + SNAPSHOT_DATE)
+        df_history = join_agile(df_history, df_agile_history, has_snapshot=True)
+        # Join agile summary onto epic summary (by FEATURE_KEY only, no snapshot)
+        df_summary = join_agile(df_summary, df_agile_summary, has_snapshot=False)
+
+    with step_spinner(6, total, "Unioning & transforming"):
         df = union_data(df_summary, df_history)
         df = data_functions(df)
 
     log_dataframe_summary(df, "Epics Final")
 
-    with step_spinner(5, total, "Exporting EPICS.hyper"):
+    with step_spinner(7, total, "Exporting EPICS.hyper"):
         export_hyper(df, hyper_path, "Epics", config)
 
-    with step_spinner(6, total, "Building ACRP release range"):
+    with step_spinner(8, total, "Building ACRP release range"):
         df_acrp = build_acrp(df)
     log_dataframe_summary(df_acrp, "Epics ACRP")
 
-    with step_spinner(7, total, "Exporting EPICS_ACRP.hyper"):
+    with step_spinner(9, total, "Exporting EPICS_ACRP.hyper"):
         export_hyper(df_acrp, acrp_hyper_path, "Epics_ACRP", config)
 
     if publish:
-        with step_spinner(8, total, "Publishing EPICS to Tableau"):
+        with step_spinner(10, total, "Publishing to Tableau"):
             publish_hyper(hyper_path, "Epics", config, targets=publish_targets)
-        with step_spinner(9, total, "Publishing EPICS_ACRP to Tableau"):
             publish_hyper(acrp_hyper_path, "Epics_ACRP", config, targets=publish_targets)
 
     elapsed = time.time() - start

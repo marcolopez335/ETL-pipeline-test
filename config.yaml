@@ -42,6 +42,8 @@ epics:
   sql_history_full: "EpicHistory.sql"
   sql_history_recent: "EpicHistory_recent.sql"
   sql_summary: "EpicSummary.sql"
+  sql_agile_history: "AgileHistory.sql"
+  sql_agile_summary: "AgileSummary.sql"
 
 tableau:
   tst:

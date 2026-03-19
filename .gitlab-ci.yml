@@ -1,0 +1,28 @@
+stages:
+  - lint
+  - test
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+  PYTHON_VERSION: "3.12"
+
+default:
+  image: python:${PYTHON_VERSION}-slim
+  cache:
+    paths:
+      - .pip-cache/
+
+lint:
+  stage: lint
+  before_script:
+    - pip install ruff
+  script:
+    - ruff check . --select E,F,W --ignore E501
+  allow_failure: false
+
+test:fill-snapshots:
+  stage: test
+  before_script:
+    - pip install polars
+  script:
+    - python test_fill_snapshots.py
