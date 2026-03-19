@@ -136,7 +136,8 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
 
     if publish:
         with step_spinner(7, total, "Publishing to Tableau"):
-            publish_hyper(hyper_path, "Stories", config, targets=publish_targets)
+            publish_hyper(hyper_path, "Stories", config, targets=publish_targets,
+                         datasource_name=cfg["table_id"])
 
     elapsed = time.time() - start
     logger.info("Stories pipeline complete")

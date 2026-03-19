@@ -314,8 +314,10 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
 
     if publish:
         with step_spinner(10, total, "Publishing to Tableau"):
-            publish_hyper(hyper_path, "Epics", config, targets=publish_targets)
-            publish_hyper(acrp_hyper_path, "Epics_ACRP", config, targets=publish_targets)
+            publish_hyper(hyper_path, "Epics", config, targets=publish_targets,
+                         datasource_name=cfg["table_id"])
+            publish_hyper(acrp_hyper_path, "Epics_ACRP", config, targets=publish_targets,
+                         datasource_name=cfg["acrp_table_id"])
 
     elapsed = time.time() - start
     logger.info("Epics pipeline complete")

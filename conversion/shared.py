@@ -464,12 +464,14 @@ def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: di
     logger.info(f"Exported {df.height} rows to {hyper_path} (table: {table_name})")
 
 
-def publish_hyper(hyper_path: Path, table_name: str, config: dict, targets: list[str] = None) -> None:
+def publish_hyper(hyper_path: Path, table_name: str, config: dict,
+                   targets: list[str] = None, datasource_name: str = None) -> None:
     """Publish a hyper file to one or more Tableau servers.
 
     Args:
         targets: List of server keys to publish to (e.g. ["tst", "prd"]).
                  If None, publishes to all configured servers.
+        datasource_name: Name of the datasource on Tableau Server.
     """
     tab_cfg = config["tableau"]
 
@@ -501,6 +503,7 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict, targets: list
             publish_hyper_to_tableau(
                 hyper_path=hyper_path,
                 table_name=table_name,
+                datasource_name=datasource_name,
                 config=publish_config,
             )
             logger.info(f"Published {hyper_path.name} to {label}: {env_cfg['project_name']}")
