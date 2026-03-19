@@ -62,15 +62,30 @@ database:
   name: "default"
   use_stored_credentials: true
 
-tableau:
-  server_url: "https://tableau.example.com"
-  site_id: "your-site"
-  project_name: "Your Project"
-  overwrite: true
-
 backup:
   enabled: true
   max_backups: 5
+
+cache:
+  backup_enabled: true
+  max_cache_backups: 3
+  min_retention_pct: 0.98
+
+snapshots:
+  day_of_week: 0        # 0=Monday, 1=Tuesday, ..., 6=Sunday
+  lookback_weeks: 4
+
+tableau:
+  tst:
+    server_url: "https://tableau-tst.example.com"
+    site_id: "your-site"
+    project_name: "Your Project"
+    overwrite: true
+  prd:
+    server_url: "https://tableau.example.com"
+    site_id: "your-site"
+    project_name: "Your Project"
+    overwrite: true
 ```
 
 ## Usage
@@ -80,10 +95,13 @@ backup:
 | `python main.py` | Run all pipelines (stories + epics) |
 | `python main.py --stories` | Run stories pipeline only |
 | `python main.py --epics` | Run epics pipeline only |
-| `python main.py --publish` | Run and publish to Tableau Server |
+| `python main.py --publish` | Run and publish to all Tableau servers (tst + prd) |
+| `python main.py --publish-tst` | Run and publish to Tableau TST only |
+| `python main.py --publish-prd` | Run and publish to Tableau PRD only |
 | `python main.py --epics --publish` | Run epics and publish |
 | `python main.py --update-cache` | Update history caches only (no export) |
 | `python main.py --update-cache --stories` | Update stories cache only |
+| `python main.py --force` | Bypass cache shrinkage safety check |
 | `python main.py --test` | Test database connection |
 | `python main.py --epics --query` | Run epics then open SQL shell |
 | `python main.py --query` | Run all pipelines then open SQL shell |
@@ -100,7 +118,7 @@ Flags can be combined: `python main.py --stories --publish --query`
 2. Update incremental history cache
 3. Fill missing Monday snapshots (synthetic)
 4. Union summary with history, fetch and join epics lookup
-5. Apply transformations (`LAST_UPDATED`, `PROJECT_NAME_VERSION`, column renaming)
+5. Apply transformations (`LAST_UPDATED`, `PROJECT_NAME_VERSION`, `SPRINT_NAME_ALT`, `SNAPSHOT_DATE_ALT`, `PI_FROM_SPRINT`, column renaming)
 6. Export to `STORIES.hyper`
 7. Optionally publish to Tableau Server
 
@@ -221,22 +239,24 @@ Next run (DB has Mar 9 now):
                         ┌─────────┴─────────┐
                         │                   │
                    export_hyper()      build_acrp()
-                     (pantab)               │
+                   (Arrow → pantab)         │
                         │              export_hyper()
                         │                   │
                    publish_hyper()    publish_hyper()
-                    (optional)         (optional)
+                  (tst / prd)        (tst / prd)
 ```
 
 ## Features
 
 - **Polars** — Multi-threaded DataFrame operations, native anti-joins, and Arrow-based memory for fast processing at 4M+ rows
+- **Zero-copy Hyper export** — Exports via Polars → Arrow → pantab, bypassing pandas entirely to avoid memory doubling on large datasets
 - **Lazy caching** — History data cached as `.parquet`; `scan_parquet` lazily reads only the rows needed for the incremental merge, avoiding full cache loads into memory
-- **Synthetic snapshots** — Automatically fills missing Monday snapshots from summary data; replaced by real data on the next pipeline run
+- **Synthetic snapshots** — Automatically fills missing snapshots from summary data; replaced by real data on the next pipeline run. Snapshot day and lookback weeks are configurable.
 - **Interactive SQL** — Query final DataFrames with standard SQL via `--query` for debugging and data validation; also available standalone via `python -m sql_shell`
 - **Sprint parsing** — Extracts sprint versions from names, handles IP sprints, and computes min/max per snapshot and program increment using numeric sort keys
-- **Automatic backups** — Previous hyper files are timestamped and saved before overwrite, with configurable rotation (default: keep 5)
+- **Automatic backups** — Previous hyper files and cache files are timestamped and saved before overwrite, with configurable rotation
 - **Summary statistics** — Each step logs a formatted table with column dtypes, null counts/percentages, unique values, min/max, and memory usage
 - **Rich console output** — Color-coded progress spinners, step indicators, and formatted tables via [Rich](https://github.com/Textualize/rich)
-- **Tableau publishing** — Publish hyper files directly to Tableau Server with `--publish`
-- **Incremental updates** — Only recent history is fetched and merged on subsequent runs, with a safety check preventing cache shrinkage beyond 2%
+- **Multi-environment Tableau publishing** — Publish hyper files to TST, PRD, or all Tableau servers with `--publish`, `--publish-tst`, `--publish-prd`
+- **Incremental updates** — Only recent history is fetched and merged on subsequent runs, with a safety check preventing cache shrinkage beyond a configurable threshold (default: 2%)
+- **Memory-efficient pipeline** — Intermediate DataFrames are freed eagerly, stats are computed once and shared across logger and console display
