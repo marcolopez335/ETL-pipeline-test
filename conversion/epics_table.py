@@ -63,8 +63,11 @@ def _sort_key_to_version(col_name: str, alias: str) -> pl.Expr:
     return (major + pl.lit(".") + minor + pl.lit(".") + patch).alias(alias)
 
 
-def _compute_sprint_range(df: pl.DataFrame) -> pl.DataFrame:
+def _compute_sprint_range(df: pl.DataFrame, partition_cols: list[str] = None) -> pl.DataFrame:
     """Extract sprint version from SPRINT_NAME and compute min/max per partition."""
+    if partition_cols is None:
+        partition_cols = SPRINT_PARTITION
+
     # Extract version pattern from end of SPRINT_NAME (e.g. "26.1.2" or "26.1.IP")
     df = df.with_columns(
         pl.col("SPRINT_NAME")
@@ -86,10 +89,10 @@ def _compute_sprint_range(df: pl.DataFrame) -> pl.DataFrame:
     # Build sortable key for proper version comparison
     df = df.with_columns(_sprint_sort_key().alias("_sprint_sort_key"))
 
-    # Min/max per SNAPSHOT_DATE + PROGRAM_INCREMENT
+    # Min/max per partition
     df = df.with_columns([
-        pl.col("_sprint_sort_key").min().over(SPRINT_PARTITION).alias("_min_key"),
-        pl.col("_sprint_sort_key").max().over(SPRINT_PARTITION).alias("_max_key"),
+        pl.col("_sprint_sort_key").min().over(partition_cols).alias("_min_key"),
+        pl.col("_sprint_sort_key").max().over(partition_cols).alias("_max_key"),
     ])
 
     # Reconstruct version strings from keys
@@ -111,7 +114,7 @@ def _compute_sprint_range(df: pl.DataFrame) -> pl.DataFrame:
 
 def _build_sprint_lookup(df: pl.DataFrame, partition_cols: list[str]) -> pl.DataFrame:
     """Compute MIN_SPRINT / MAX_SPRINT from sprint name data and collapse to lookup."""
-    df = _compute_sprint_range(df)
+    df = _compute_sprint_range(df, partition_cols=partition_cols)
     lookup = df.select(partition_cols + ["MIN_SPRINT", "MAX_SPRINT"]).unique()
     logger.info(f"Sprint range lookup ({partition_cols}): {lookup.height} rows")
     return lookup
