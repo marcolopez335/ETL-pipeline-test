@@ -135,7 +135,11 @@ def fetch_agile(config: dict, history: bool = True) -> pl.DataFrame:
     """Fetch agile sprint data (history or summary) as a separate query."""
     cfg = config["epics"]
     sql_key = "sql_agile_history" if history else "sql_agile_summary"
-    return run_query(cfg[sql_key], database=config["database"]["name"])
+    df = run_query(cfg[sql_key], database=config["database"]["name"])
+    # Cast SNAPSHOT_DATE to Date to match epic data (avoids type mismatch on join)
+    if "SNAPSHOT_DATE" in df.columns:
+        df = df.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
+    return df
 
 
 def join_agile(df: pl.DataFrame, df_agile: pl.DataFrame, has_snapshot: bool = True) -> pl.DataFrame:
