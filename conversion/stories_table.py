@@ -26,6 +26,11 @@ logger = get_logger(__name__)
 TOTAL_STEPS_BASE = 6
 TOTAL_STEPS_PUBLISH = 7
 
+# Extracts sprint version like "26.1.IP" from sprint names like "AMMM 26.1.IP"
+SPRINT_NAME_PATTERN = r"(\d{2}\.\d.\w+)"
+# PI is the first 4 chars of the extracted version: "26.1" from "26.1.IP"
+PI_PREFIX_LENGTH = 4
+
 
 def fetch_summary_full(config: dict) -> pl.DataFrame:
     cfg = config["stories"]
@@ -55,12 +60,12 @@ def data_functions(df: pl.DataFrame) -> pl.DataFrame:
     df = df.with_columns([
         pl.lit(now).alias("LAST_UPDATED"),
         (pl.col("PROJECT_NAME") + " " + pl.col("FIX_VERSION")).alias("PROJECT_NAME_VERSION"),
-        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(r"(\d{2}\.\d.\w+)").alias("SPRINT_NAME_ALT"),
+        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_NAME_PATTERN).alias("SPRINT_NAME_ALT"),
         pl.when(pl.col("SNAPSHOT_DATE").is_null())
           .then(pl.lit(now))
           .otherwise(pl.col("SNAPSHOT_DATE"))
           .alias("SNAPSHOT_DATE_ALT"),
-        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(r"(\d{2}\.\d.\w+)").str.slice(0, 4).alias("PI_FROM_SPRINT"),
+        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_NAME_PATTERN).str.slice(0, PI_PREFIX_LENGTH).alias("PI_FROM_SPRINT"),
     ])
 
     # Rename columns: SNAKE_CASE -> Title Case
@@ -73,7 +78,7 @@ def data_functions(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def run_update_cache(config: dict):
+def run_update_cache(config: dict, force: bool = False):
     cfg = config["stories"]
     cache_path = CACHE_DIR / cfg["cache_filename"]
     print_header("Stories Cache Update (Polars)")
@@ -82,11 +87,13 @@ def run_update_cache(config: dict):
         update_history(
             cfg["sql_history_full"], cfg["sql_history_recent"],
             cfg["key_column"], cache_path,
+            config=config, force=force,
         )
     logger.info("Stories cache update complete")
 
 
-def run(config: dict, publish: bool = False) -> pl.DataFrame:
+def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
+        force: bool = False) -> pl.DataFrame:
     cfg = config["stories"]
     cache_path = CACHE_DIR / cfg["cache_filename"]
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
@@ -105,12 +112,13 @@ def run(config: dict, publish: bool = False) -> pl.DataFrame:
         df_history = update_history(
             cfg["sql_history_full"], cfg["sql_history_recent"],
             cfg["key_column"], cache_path,
+            config=config, force=force,
         )
         df_history = clean_dtypes(df_history, EXPECTED_DTYPES_STORIES)
     log_dataframe_summary(df_history, "Stories History")
 
     with step_spinner(3, total, "Filling missing snapshots"):
-        df_history = fill_missing_snapshots(df_summary, df_history, cfg["key_column"])
+        df_history = fill_missing_snapshots(df_summary, df_history, cfg["key_column"], config=config)
 
     with step_spinner(4, total, "Fetching epics"):
         stories = union_data(df_summary, df_history)
@@ -128,7 +136,7 @@ def run(config: dict, publish: bool = False) -> pl.DataFrame:
 
     if publish:
         with step_spinner(7, total, "Publishing to Tableau"):
-            publish_hyper(hyper_path, "Stories", config)
+            publish_hyper(hyper_path, "Stories", config, targets=publish_targets)
 
     elapsed = time.time() - start
     logger.info("Stories pipeline complete")

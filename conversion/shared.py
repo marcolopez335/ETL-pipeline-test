@@ -2,7 +2,6 @@ import shutil
 from datetime import datetime, timedelta
 
 import polars as pl
-import pandas as pd
 import pantab as pt
 import yaml
 from pathlib import Path
@@ -41,6 +40,7 @@ def load_sql(filename: str) -> str:
 
 
 def run_query(sql_filename: str, database: str = "default", verbose: bool = True) -> pl.DataFrame:
+    import gc
     logger.info(f"Running query: {sql_filename}")
     query = load_sql(sql_filename)
     conn = TibcoConnection()
@@ -49,6 +49,9 @@ def run_query(sql_filename: str, database: str = "default", verbose: bool = True
     try:
         pdf = conn.execute_query(query, verbose=verbose)
         df = pl.from_pandas(pdf)
+        # Free the pandas copy immediately — it can be as large as the Polars one
+        del pdf
+        gc.collect()
         # Cast any Null-typed columns (all-null from pandas) to Utf8 early
         null_cols = [c for c in df.columns if df[c].dtype == pl.Null]
         if null_cols:
@@ -167,8 +170,28 @@ def read_history_cache(cache_path: Path) -> pl.LazyFrame | None:
     return lf
 
 
-def write_history_cache(df: pl.DataFrame, cache_path: Path) -> None:
+def write_history_cache(df: pl.DataFrame, cache_path: Path, config: dict = None) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    # Backup existing cache before overwrite
+    if config is not None:
+        cache_cfg = config.get("cache", {})
+        if cache_cfg.get("backup_enabled", False) and cache_path.exists():
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_name = f"{cache_path.stem}_{timestamp}{cache_path.suffix}"
+            backup_path = BACKUP_DIR / backup_name
+            shutil.copy2(cache_path, backup_path)
+            logger.info(f"Cache backup: {cache_path.name} -> {backup_name}")
+            # Rotate old cache backups
+            max_backups = cache_cfg.get("max_cache_backups", 3)
+            existing = sorted(
+                BACKUP_DIR.glob(f"{cache_path.stem}_*{cache_path.suffix}"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for old in existing[max_backups:]:
+                old.unlink()
+                logger.info(f"Removed old cache backup: {old.name}")
     df.write_parquet(cache_path)
     logger.info(f"Wrote {df.height} rows to cache: {cache_path}")
 
@@ -226,8 +249,10 @@ def fetch_history(sql_filename: str, key_col: str) -> pl.DataFrame:
 
 
 def update_history_cache_with_recent(
-    cached_lf: pl.LazyFrame, recent: pl.DataFrame, key_col: str
+    cached_lf: pl.LazyFrame, recent: pl.DataFrame, key_col: str,
+    config: dict = None,
 ) -> pl.DataFrame:
+    import gc
     KEY_COLS = [key_col, "SNAPSHOT_DATE"]
 
     # Cast types lazily on the cached data — only reads what's needed
@@ -240,67 +265,94 @@ def update_history_cache_with_recent(
         pl.col(key_col).cast(pl.Utf8, strict=False),
     ])
 
+    # Get cached row count cheaply before we consume the lazy frame
+    # (only reads parquet metadata + key columns, not all data)
+    cached_count = cached_lf.select(pl.len()).collect().item()
+
     # Anti-join lazily — Polars only scans the parquet rows it needs
     recent_keys = recent.lazy().select(KEY_COLS).unique()
-    cached_keep_lf = cached_lf.join(recent_keys, on=KEY_COLS, how="anti")
-
-    # Collect the filtered cache (much smaller than full cache)
-    cached_keep = cached_keep_lf.collect()
-    cached_count = cached_lf.select(pl.len()).collect().item()
+    cached_keep = cached_lf.join(recent_keys, on=KEY_COLS, how="anti").collect()
 
     # Align schemas before concat — cached from parquet may differ from fresh query
     cached_keep, recent = _align_schemas(cached_keep, recent)
 
+    # Concat and free the inputs immediately to avoid holding 2x in memory
     combined = pl.concat([cached_keep, recent])
-    combined = combined.drop_nulls(subset=KEY_COLS)
-    combined = combined.unique(subset=KEY_COLS, keep="last")
+    del cached_keep, recent
+    gc.collect()
 
-    if combined.height < 0.98 * cached_count:
+    combined = combined.drop_nulls(subset=KEY_COLS).unique(subset=KEY_COLS, keep="last")
+
+    min_retention = 0.98
+    if config is not None:
+        min_retention = config.get("cache", {}).get("min_retention_pct", 0.98)
+    if combined.height < min_retention * cached_count:
         raise RuntimeError(
-            f"Cache shrank unexpectedly: {combined.height} rows vs {cached_count} prior"
+            f"Cache shrank unexpectedly: {combined.height} rows vs {cached_count} prior "
+            f"(threshold: {min_retention:.0%}). Use --force to override."
         )
 
     logger.info(f"Cache updated: {cached_count} -> {combined.height} rows")
     return combined
 
 
-def build_and_cache_history(sql_full: str, key_col: str, cache_path: Path) -> pl.DataFrame:
+def build_and_cache_history(sql_full: str, key_col: str, cache_path: Path, config: dict = None) -> pl.DataFrame:
     logger.info("Building full history cache")
     df = fetch_history(sql_full, key_col)
-    write_history_cache(df, cache_path)
+    write_history_cache(df, cache_path, config=config)
     return df
 
 
 def update_history(
-    sql_full: str, sql_recent: str, key_col: str, cache_path: Path
+    sql_full: str, sql_recent: str, key_col: str, cache_path: Path,
+    config: dict = None, force: bool = False,
 ) -> pl.DataFrame:
     cached_lf = read_history_cache(cache_path)
 
     if cached_lf is None:
-        return build_and_cache_history(sql_full, key_col, cache_path)
+        return build_and_cache_history(sql_full, key_col, cache_path, config=config)
 
     recent = fetch_history(sql_recent, key_col)
-    updated = update_history_cache_with_recent(cached_lf, recent, key_col)
 
-    write_history_cache(updated, cache_path)
+    if force:
+        # Skip shrinkage check when --force is used
+        cfg_override = dict(config) if config else {}
+        cfg_override.setdefault("cache", {})
+        cfg_override["cache"] = {**cfg_override["cache"], "min_retention_pct": 0.0}
+        updated = update_history_cache_with_recent(cached_lf, recent, key_col, config=cfg_override)
+    else:
+        updated = update_history_cache_with_recent(cached_lf, recent, key_col, config=config)
+
+    write_history_cache(updated, cache_path, config=config)
     return updated
 
 
-def get_last_n_mondays(n: int, from_date: datetime = None) -> list[datetime]:
-    """Get the last n Mondays up to and including the most recent Monday."""
+def get_last_n_snapshots(n: int, day_of_week: int = 0, from_date: datetime = None) -> list[datetime]:
+    """Get the last n snapshot days up to and including the most recent one.
+
+    Args:
+        n: Number of past snapshot days to return.
+        day_of_week: 0=Monday, 1=Tuesday, ..., 6=Sunday.
+        from_date: Reference date (defaults to now).
+    """
     if from_date is None:
         from_date = datetime.now()
-    days_since_monday = from_date.weekday()  # 0=Monday
-    most_recent_monday = from_date - timedelta(days=days_since_monday)
-    most_recent_monday = most_recent_monday.replace(hour=0, minute=0, second=0, microsecond=0)
-    return [most_recent_monday - timedelta(weeks=i) for i in range(n)]
+    days_since = (from_date.weekday() - day_of_week) % 7
+    most_recent = from_date - timedelta(days=days_since)
+    most_recent = most_recent.replace(hour=0, minute=0, second=0, microsecond=0)
+    return [most_recent - timedelta(weeks=i) for i in range(n)]
+
+
+# Keep old name as alias for backwards compatibility
+def get_last_n_mondays(n: int, from_date: datetime = None) -> list[datetime]:
+    return get_last_n_snapshots(n, day_of_week=0, from_date=from_date)
 
 
 def fill_missing_snapshots(
     df_summary: pl.DataFrame,
     df_history: pl.DataFrame,
     key_col: str,
-    n_mondays: int = 4,
+    config: dict = None,
 ) -> pl.DataFrame:
     """Fill missing Monday snapshots in history using summary data.
 
@@ -311,7 +363,11 @@ def fill_missing_snapshots(
     When the database later provides the real snapshot, the cache update's
     anti-join will replace the synthetic row automatically.
     """
-    mondays = get_last_n_mondays(n_mondays)
+    snap_cfg = (config or {}).get("snapshots", {})
+    day_of_week = snap_cfg.get("day_of_week", 0)
+    n_weeks = snap_cfg.get("lookback_weeks", 4)
+
+    mondays = get_last_n_snapshots(n_weeks, day_of_week=day_of_week)
 
     # Get existing snapshot dates from history
     existing_dates = set()
@@ -324,13 +380,16 @@ def fill_missing_snapshots(
     # Find missing Mondays
     missing_mondays = [m for m in mondays if m.date() not in existing_dates]
 
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    day_name = day_names[day_of_week]
+
     if not missing_mondays:
-        logger.info(f"No missing snapshots in the last {n_mondays} Mondays")
+        logger.info(f"No missing snapshots in the last {n_weeks} {day_name}s")
         return df_history
 
-    logger.info(f"Found {len(missing_mondays)} missing Monday snapshot(s)")
+    logger.info(f"Found {len(missing_mondays)} missing {day_name} snapshot(s)")
     for m in sorted(missing_mondays):
-        logger.info(f"  Missing: {m.strftime('%Y-%m-%d')} (Monday)")
+        logger.info(f"  Missing: {m.strftime('%Y-%m-%d')} ({day_name})")
 
     # Build synthetic snapshots from summary data
     summary_cols = [c for c in df_summary.columns if c not in ("SNAPSHOT_DATE", "IS_SYNTHETIC")]
@@ -385,37 +444,62 @@ def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: di
     null_cols = [col for col in df.columns if df[col].dtype == pl.Null]
     if null_cols:
         df = df.with_columns([pl.col(c).cast(pl.Utf8) for c in null_cols])
-    pdf = df.to_pandas()
-    # Force all-null columns to string dtype — pantab infers Arrow "null" type otherwise
-    for col in pdf.columns:
-        if pdf[col].isna().all():
-            pdf[col] = pdf[col].astype(str)
-    pt.frame_to_hyper(pdf, database=hyper_path, table_mode="w", table=table_name)
+    # Use Arrow directly — Polars -> Arrow is near zero-copy (both Arrow-backed),
+    # whereas .to_pandas() materializes numpy arrays and can trigger ArrayMemoryError
+    import pyarrow as pa
+    arrow_table = df.to_arrow()
+    # Cast null-typed Arrow columns to string to avoid pantab "unsupported type: null"
+    for i, field in enumerate(arrow_table.schema):
+        if pa.types.is_null(field.type):
+            arrow_table = arrow_table.set_column(
+                i, field.name, arrow_table.column(i).cast(pa.string())
+            )
+    pt.frame_to_hyper(arrow_table, database=hyper_path, table_mode="w", table=table_name)
     logger.info(f"Exported {df.height} rows to {hyper_path} (table: {table_name})")
 
 
-def publish_hyper(hyper_path: Path, table_name: str, config: dict) -> None:
+def publish_hyper(hyper_path: Path, table_name: str, config: dict, targets: list[str] = None) -> None:
+    """Publish a hyper file to one or more Tableau servers.
+
+    Args:
+        targets: List of server keys to publish to (e.g. ["tst", "prd"]).
+                 If None, publishes to all configured servers.
+    """
     tab_cfg = config["tableau"]
 
-    publish_config = TableauPublishConfig(
-        server_url=tab_cfg["server_url"],
-        site_id=tab_cfg["site_id"],
-        project_name=tab_cfg["project_name"],
-        overwrite=tab_cfg.get("overwrite", True),
-    )
+    if targets is None:
+        targets = list(tab_cfg.keys())
 
-    logger.info(f"Publishing {hyper_path.name} to Tableau ({tab_cfg['server_url']})")
-    print_info(f"Publishing [bold]{hyper_path.name}[/] to Tableau")
+    for target in targets:
+        if target not in tab_cfg:
+            logger.warning(f"Tableau target '{target}' not found in config, skipping")
+            continue
 
-    try:
-        publish_hyper_to_tableau(
-            hyper_path=hyper_path,
-            table_name=table_name,
-            config=publish_config,
+        env_cfg = tab_cfg[target]
+        if not env_cfg.get("server_url"):
+            logger.warning(f"Tableau {target}: no server_url configured, skipping")
+            continue
+
+        publish_config = TableauPublishConfig(
+            server_url=env_cfg["server_url"],
+            site_id=env_cfg["site_id"],
+            project_name=env_cfg["project_name"],
+            overwrite=env_cfg.get("overwrite", True),
         )
-        logger.info(f"Published {hyper_path.name} to project: {tab_cfg['project_name']}")
-        print_success(f"Published to [bold]{tab_cfg['project_name']}[/]")
-    except Exception as exc:
-        logger.error(f"Publish failed: {exc}")
-        print_error(f"Publish failed: {exc}")
-        raise
+
+        label = target.upper()
+        logger.info(f"Publishing {hyper_path.name} to Tableau {label} ({env_cfg['server_url']})")
+        print_info(f"Publishing [bold]{hyper_path.name}[/] to Tableau [cyan]{label}[/]")
+
+        try:
+            publish_hyper_to_tableau(
+                hyper_path=hyper_path,
+                table_name=table_name,
+                config=publish_config,
+            )
+            logger.info(f"Published {hyper_path.name} to {label}: {env_cfg['project_name']}")
+            print_success(f"Published to [bold]{label}[/] → {env_cfg['project_name']}")
+        except Exception as exc:
+            logger.error(f"Publish to {label} failed: {exc}")
+            print_error(f"Publish to {label} failed: {exc}")
+            raise

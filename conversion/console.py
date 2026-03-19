@@ -1,7 +1,7 @@
+import math
 import time
 from contextlib import contextmanager
 
-import pandas as pd
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -23,7 +23,7 @@ def _format_bytes(nbytes: int) -> str:
 
 
 def _format_value(val) -> str:
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    if val is None or (isinstance(val, float) and math.isnan(val)):
         return "-"
     val_str = str(val)
     if len(val_str) > 20:
@@ -67,76 +67,6 @@ def step_spinner(step: int, total: int, message: str):
             raise
     elapsed = time.time() - start
     print_step(step, total, message, f"{elapsed:.1f}s")
-
-
-def print_dataframe_summary(df: pd.DataFrame, label: str) -> None:
-    total_mem = int(df.memory_usage(deep=True).sum())
-
-    table = Table(
-        title=f"[bold]{label}[/]  [dim]({len(df):,} rows x {len(df.columns)} cols | {_format_bytes(total_mem)})[/]",
-        box=box.ROUNDED,
-        header_style="bold cyan",
-        border_style="dim",
-        show_lines=False,
-    )
-
-    table.add_column("Column", style="white", min_width=20)
-    table.add_column("Dtype", style="yellow")
-    table.add_column("Nulls", justify="right", style="dim")
-    table.add_column("Null %", justify="right")
-    table.add_column("Uniques", justify="right", style="cyan")
-    table.add_column("Min", style="dim")
-    table.add_column("Max", style="dim")
-    table.add_column("Memory", justify="right", style="dim")
-
-    for col in df.columns:
-        null_count = int(df[col].isna().sum())
-        null_pct = (null_count / len(df) * 100) if len(df) > 0 else 0.0
-        unique_count = int(df[col].nunique())
-        col_mem = int(df[col].memory_usage(deep=True))
-
-        if null_pct > 10:
-            pct_style = "red bold"
-        elif null_pct > 5:
-            pct_style = "yellow"
-        elif null_pct > 0:
-            pct_style = "dim"
-        else:
-            pct_style = "green"
-
-        # Min/Max for numeric and datetime columns
-        if pd.api.types.is_numeric_dtype(df[col]) or pd.api.types.is_datetime64_any_dtype(df[col]):
-            col_min = _format_value(df[col].min())
-            col_max = _format_value(df[col].max())
-        else:
-            col_min = "-"
-            col_max = "-"
-
-        table.add_row(
-            col,
-            str(df[col].dtype),
-            f"{null_count:,}",
-            Text(f"{null_pct:.1f}%", style=pct_style),
-            f"{unique_count:,}",
-            col_min,
-            col_max,
-            _format_bytes(col_mem),
-        )
-
-    total_nulls = int(df.isna().sum().sum())
-    total_cells = df.shape[0] * df.shape[1]
-    total_pct = (total_nulls / total_cells * 100) if total_cells > 0 else 0.0
-
-    table.add_section()
-    table.add_row(
-        "[bold]Total[/]", "", f"{total_nulls:,}",
-        Text(f"{total_pct:.1f}%", style="bold"),
-        "", "", "",
-        f"[bold]{_format_bytes(total_mem)}[/]",
-    )
-
-    console.print(table)
-    console.print()
 
 
 def print_polars_summary(df, label: str) -> None:

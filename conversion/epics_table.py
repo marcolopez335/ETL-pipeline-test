@@ -24,6 +24,12 @@ logger = get_logger(__name__)
 
 SPRINT_PARTITION = ["SNAPSHOT_DATE", "PROGRAM_INCREMENT"]
 
+# Sprint version parsing constants
+# IP (Innovation & Planning) is the final sprint in a PI, so it sorts last
+IP_SPRINT_LABEL = "IP"
+IP_SPRINT_SORT_VALUE = 99
+SPRINT_VERSION_REGEX = r"(\d{2,4}\.\d+\.(?:\d+|IP))\s*$"
+
 
 def _sprint_sort_key() -> pl.Expr:
     """Parse sprint version (e.g. '26.1.2' or '26.1.IP') into a sortable integer.
@@ -36,8 +42,8 @@ def _sprint_sort_key() -> pl.Expr:
     minor = version.list.get(1).cast(pl.Int64, strict=False).fill_null(0)
     patch_str = version.list.get(2)
     patch = (
-        pl.when(patch_str == "IP")
-        .then(pl.lit(99))
+        pl.when(patch_str == IP_SPRINT_LABEL)
+        .then(pl.lit(IP_SPRINT_SORT_VALUE))
         .otherwise(patch_str.cast(pl.Int64, strict=False).fill_null(0))
     )
     return major * 10000 + minor * 100 + patch
@@ -50,8 +56,8 @@ def _sort_key_to_version(col_name: str, alias: str) -> pl.Expr:
     minor = ((key % 10000) // 100).cast(pl.Utf8)
     patch_num = key % 100
     patch = (
-        pl.when(patch_num == 99)
-        .then(pl.lit("IP"))
+        pl.when(patch_num == IP_SPRINT_SORT_VALUE)
+        .then(pl.lit(IP_SPRINT_LABEL))
         .otherwise(patch_num.cast(pl.Utf8))
     )
     return (major + pl.lit(".") + minor + pl.lit(".") + patch).alias(alias)
@@ -63,9 +69,19 @@ def _compute_sprint_range(df: pl.DataFrame) -> pl.DataFrame:
     df = df.with_columns(
         pl.col("SPRINT_NAME")
         .cast(pl.Utf8)
-        .str.extract(r"(\d{2,4}\.\d+\.(?:\d+|IP))\s*$")
+        .str.extract(SPRINT_VERSION_REGEX)
         .alias("SPRINT_VERSION")
     )
+
+    # Warn if many SPRINT_VERSION values are null (regex didn't match)
+    null_count = df["SPRINT_VERSION"].null_count()
+    if df.height > 0:
+        null_pct = null_count / df.height
+        if null_pct > 0.10:
+            logger.warning(
+                f"SPRINT_VERSION: {null_count}/{df.height} ({null_pct:.0%}) values are null — "
+                f"regex may not match SPRINT_NAME format"
+            )
 
     # Build sortable key for proper version comparison
     df = df.with_columns(_sprint_sort_key().alias("_sprint_sort_key"))
@@ -144,7 +160,7 @@ def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
     return result
 
 
-def run_update_cache(config: dict):
+def run_update_cache(config: dict, force: bool = False):
     cfg = config["epics"]
     cache_path = CACHE_DIR / cfg["cache_filename"]
     print_header("Epics Cache Update (Polars)")
@@ -153,6 +169,7 @@ def run_update_cache(config: dict):
         update_history(
             cfg["sql_history_full"], cfg["sql_history_recent"],
             cfg["key_column"], cache_path,
+            config=config, force=force,
         )
     logger.info("Epics cache update complete")
 
@@ -161,7 +178,8 @@ def _calc_steps(publish: bool) -> int:
     return 9 if publish else 7
 
 
-def run(config: dict, publish: bool = False) -> tuple[pl.DataFrame, pl.DataFrame]:
+def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
+        force: bool = False) -> tuple[pl.DataFrame, pl.DataFrame]:
     cfg = config["epics"]
     cache_path = CACHE_DIR / cfg["cache_filename"]
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
@@ -181,12 +199,13 @@ def run(config: dict, publish: bool = False) -> tuple[pl.DataFrame, pl.DataFrame
         df_history = update_history(
             cfg["sql_history_full"], cfg["sql_history_recent"],
             cfg["key_column"], cache_path,
+            config=config, force=force,
         )
         df_history = clean_dtypes(df_history, EXPECTED_DTYPES_EPICS)
     log_dataframe_summary(df_history, "Epics History")
 
     with step_spinner(3, total, "Filling missing snapshots"):
-        df_history = fill_missing_snapshots(df_summary, df_history, cfg["key_column"])
+        df_history = fill_missing_snapshots(df_summary, df_history, cfg["key_column"], config=config)
 
     with step_spinner(4, total, "Unioning & transforming"):
         df = union_data(df_summary, df_history)
@@ -206,9 +225,9 @@ def run(config: dict, publish: bool = False) -> tuple[pl.DataFrame, pl.DataFrame
 
     if publish:
         with step_spinner(8, total, "Publishing EPICS to Tableau"):
-            publish_hyper(hyper_path, "Epics", config)
+            publish_hyper(hyper_path, "Epics", config, targets=publish_targets)
         with step_spinner(9, total, "Publishing EPICS_ACRP to Tableau"):
-            publish_hyper(acrp_hyper_path, "Epics_ACRP", config)
+            publish_hyper(acrp_hyper_path, "Epics_ACRP", config, targets=publish_targets)
 
     elapsed = time.time() - start
     logger.info("Epics pipeline complete")
