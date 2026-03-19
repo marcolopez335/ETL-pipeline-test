@@ -90,25 +90,68 @@ tableau:
 
 ## Usage
 
-| Command | Description |
-|---------|-------------|
-| `python main.py` | Run all pipelines (stories + epics) |
-| `python main.py --stories` | Run stories pipeline only |
-| `python main.py --epics` | Run epics pipeline only |
-| `python main.py --publish` | Run and publish to all Tableau servers (tst + prd) |
-| `python main.py --publish-tst` | Run and publish to Tableau TST only |
-| `python main.py --publish-prd` | Run and publish to Tableau PRD only |
-| `python main.py --epics --publish` | Run epics and publish |
-| `python main.py --update-cache` | Update history caches only (no export) |
-| `python main.py --update-cache --stories` | Update stories cache only |
-| `python main.py --force` | Bypass cache shrinkage safety check |
-| `python main.py --test` | Test database connection |
-| `python main.py --epics --query` | Run epics then open SQL shell |
-| `python main.py --query` | Run all pipelines then open SQL shell |
-| `python main.py --query-only` | Open SQL shell from cache (no pipeline run) |
-| `python main.py --query-only --epics` | Open SQL shell with epics cache only |
+```
+python main.py [pipeline] [action] [options]
+```
 
-Flags can be combined: `python main.py --stories --publish --query`
+**Pipelines** — pick which data to process (default: both):
+
+| Flag | Description |
+|------|-------------|
+| *(none)* | Run both stories and epics |
+| `--stories` | Stories only |
+| `--epics` | Epics only |
+
+**Actions** — what to do (default: full run + export):
+
+| Flag | Description |
+|------|-------------|
+| *(none)* | Full pipeline: fetch, cache, transform, export hyper |
+| `--update-cache` | Update history caches only (no hyper export) |
+| `--test` | Test database connection and exit |
+| `--query` | Open interactive SQL shell after pipeline completes |
+| `--query-only` | Open SQL shell from cached data (skip pipeline entirely) |
+
+**Publishing** — push hyper files to Tableau Server:
+
+| Flag | Description |
+|------|-------------|
+| `--publish` | Publish to all configured Tableau servers (tst + prd) |
+| `--publish-tst` | Publish to TST only |
+| `--publish-prd` | Publish to PRD only |
+
+**Options:**
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Bypass cache shrinkage safety check (use if cache needs to shrink) |
+
+### Examples
+
+```bash
+# Run everything (stories + epics), export hyper files
+python main.py
+
+# Run only epics, publish to TST
+python main.py --epics --publish-tst
+
+# Update stories cache without exporting
+python main.py --update-cache --stories
+
+# Force a cache rebuild when data legitimately shrank
+python main.py --epics --update-cache --force
+
+# Explore cached data without hitting the database
+python main.py --query-only
+
+# Run epics pipeline, then drop into SQL shell to inspect results
+python main.py --epics --query
+
+# Publish both pipelines to production
+python main.py --publish-prd
+```
+
+Flags can be combined freely: `python main.py --stories --publish-tst --query`
 
 ## Pipelines
 
