@@ -50,10 +50,21 @@ def main():
     parser.add_argument("--epics", action="store_true", help="Run epics pipeline only")
     parser.add_argument("--update-cache", action="store_true", help="Update history caches only (no hyper export)")
     parser.add_argument("--test", action="store_true", help="Test the database connection")
-    parser.add_argument("--publish", action="store_true", help="Publish hyper files to Tableau after export")
+    parser.add_argument("--publish", action="store_true", help="Publish hyper files to all Tableau servers (tst + prd)")
+    parser.add_argument("--publish-tst", action="store_true", help="Publish hyper files to Tableau TST only")
+    parser.add_argument("--publish-prd", action="store_true", help="Publish hyper files to Tableau PRD only")
+    parser.add_argument("--force", action="store_true", help="Bypass cache shrinkage safety check")
     parser.add_argument("--query", action="store_true", help="Open interactive SQL shell after pipeline runs")
     parser.add_argument("--query-only", action="store_true", help="Open SQL shell loading from cache (no pipeline run)")
     args = parser.parse_args()
+
+    # Resolve publish targets
+    do_publish = args.publish or args.publish_tst or args.publish_prd
+    publish_targets = None  # None = all servers
+    if args.publish_tst and not args.publish_prd and not args.publish:
+        publish_targets = ["tst"]
+    elif args.publish_prd and not args.publish_tst and not args.publish:
+        publish_targets = ["prd"]
 
     config = load_config()
 
@@ -70,7 +81,7 @@ def main():
             interactive_sql(sql_tables)
         return
 
-    # If no flags given, run everything
+    # If no pipeline flags given, run everything
     run_all = not (args.stories or args.epics or args.update_cache or args.test)
 
     if args.test:
@@ -87,19 +98,21 @@ def main():
 
     if args.update_cache:
         if args.stories or (not args.stories and not args.epics):
-            stories.run_update_cache(config)
+            stories.run_update_cache(config, force=args.force)
         if args.epics or (not args.stories and not args.epics):
-            epics.run_update_cache(config)
+            epics.run_update_cache(config, force=args.force)
         return
 
     sql_tables = {}
 
     if run_all or args.stories:
-        df_stories = stories.run(config, publish=args.publish)
+        df_stories = stories.run(config, publish=do_publish, publish_targets=publish_targets,
+                                 force=args.force)
         sql_tables["stories"] = df_stories
 
     if run_all or args.epics:
-        df_epics, df_acrp = epics.run(config, publish=args.publish)
+        df_epics, df_acrp = epics.run(config, publish=do_publish, publish_targets=publish_targets,
+                                      force=args.force)
         sql_tables["epics"] = df_epics
         sql_tables["acrp"] = df_acrp
 
