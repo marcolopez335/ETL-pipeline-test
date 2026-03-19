@@ -45,6 +45,7 @@ epics:
   sql_agile_history: "AgileHistory.sql"
   sql_agile_summary: "AgileSummary.sql"
   sql_agile_sprint_range: "AgileSprintRange.sql"
+  sql_agile_sprint_range_summary: "AgileSprintRange_summary.sql"
 
 tableau:
   tst:
