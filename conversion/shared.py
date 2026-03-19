@@ -254,7 +254,7 @@ def fetch_history(sql_filename: str, key_col: str) -> pl.DataFrame:
     if missing:
         raise KeyError(f"Table missing columns: {missing}")
 
-    df = df.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Datetime, strict=False))
+    df = df.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
 
     return df
 
@@ -266,13 +266,15 @@ def update_history_cache_with_recent(
     import gc
     KEY_COLS = [key_col, "SNAPSHOT_DATE"]
 
-    # Cast types lazily on the cached data — only reads what's needed
+    # Cast SNAPSHOT_DATE to Date (not Datetime) — snapshots are daily, and
+    # Date avoids precision mismatches (us vs ns) between cache and fresh query
+    # that silently break the anti-join dedup
     cached_lf = cached_lf.with_columns([
-        pl.col("SNAPSHOT_DATE").cast(pl.Datetime, strict=False),
+        pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False),
         pl.col(key_col).cast(pl.Utf8, strict=False),
     ])
     recent = recent.with_columns([
-        pl.col("SNAPSHOT_DATE").cast(pl.Datetime, strict=False),
+        pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False),
         pl.col(key_col).cast(pl.Utf8, strict=False),
     ])
 
@@ -283,6 +285,12 @@ def update_history_cache_with_recent(
     # Anti-join lazily — Polars only scans the parquet rows it needs
     recent_keys = recent.lazy().select(KEY_COLS).unique()
     cached_keep = cached_lf.join(recent_keys, on=KEY_COLS, how="anti").collect()
+
+    removed = cached_count - cached_keep.height
+    logger.info(
+        f"Cache dedup: {cached_count} cached, {removed} replaced by {recent.height} recent "
+        f"-> {cached_keep.height} kept"
+    )
 
     # Align schemas before concat — cached from parquet may differ from fresh query
     cached_keep, recent = _align_schemas(cached_keep, recent)
