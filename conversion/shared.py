@@ -492,6 +492,7 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict,
             server_url=env_cfg["server_url"],
             site_id=env_cfg["site_id"],
             project_name=env_cfg["project_name"],
+            datasource_name=datasource_name,
             overwrite=env_cfg.get("overwrite", True),
         )
 
@@ -502,8 +503,6 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict,
         try:
             publish_hyper_to_tableau(
                 hyper_path=hyper_path,
-                table_name=table_name,
-                datasource_name=datasource_name,
                 config=publish_config,
             )
             logger.info(f"Published {hyper_path.name} to {label}: {env_cfg['project_name']}")
