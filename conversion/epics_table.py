@@ -286,6 +286,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
         df_agile_summary = fetch_agile(config, history=False)
         sprint_history_lookup, sprint_summary_lookup = fetch_sprint_range(config)
     log_dataframe_summary(df_agile_history, "Agile History")
+    log_dataframe_summary(df_agile_summary, "Agile Summary")
 
     with step_spinner(5, total, "Joining agile data"):
         # Ensure SNAPSHOT_DATE is Date on both sides before joining
