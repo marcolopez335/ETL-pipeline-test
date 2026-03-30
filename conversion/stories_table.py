@@ -48,6 +48,7 @@ def join_stories_data(stories: pl.DataFrame, epics: pl.DataFrame) -> pl.DataFram
         on=["FEATURE_ID", "SNAPSHOT_DATE"],
         how="left",
         suffix="_epics",
+        join_nulls=True,
     )
 
 
@@ -65,6 +66,7 @@ def data_functions(df: pl.DataFrame) -> pl.DataFrame:
           .then(pl.lit(now))
           .otherwise(pl.col("SNAPSHOT_DATE"))
           .alias("SNAPSHOT_DATE_ALT"),
+        pl.col("SNAPSHOT_DATE").fill_null(pl.lit(now.date())),
         pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_NAME_PATTERN).str.slice(0, PI_PREFIX_LENGTH).alias("PI_FROM_SPRINT"),
     ])
 

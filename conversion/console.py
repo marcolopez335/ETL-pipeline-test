@@ -1,5 +1,7 @@
 import math
+import sys
 import time
+import threading
 from contextlib import contextmanager
 
 from rich.console import Console
@@ -9,6 +11,9 @@ from rich.text import Text
 from rich import box
 
 console = Console()
+
+SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+SPINNER_INTERVAL = 0.08
 
 
 def _format_bytes(nbytes: int) -> str:
@@ -56,15 +61,44 @@ def print_step_fail(step: int, total: int, message: str, error: str = "") -> Non
 
 @contextmanager
 def step_spinner(step: int, total: int, message: str):
-    step_label = f"[dim]\\[{step}/{total}][/]"
+    """Animated spinner that does NOT block stdin.
+
+    Runs the animation in a daemon thread using \\r to overwrite a
+    single line.  The terminal stays fully interactive — credential
+    prompts, input(), and getpass() all work while the spinner runs.
+    """
+    label = f"[{step}/{total}]"
     start = time.time()
-    with console.status(f"  {step_label} {message}...", spinner="dots") as status:
-        try:
-            yield status
-        except Exception:
+    stop_event = threading.Event()
+
+    def _animate():
+        idx = 0
+        while not stop_event.is_set():
+            frame = SPINNER_FRAMES[idx % len(SPINNER_FRAMES)]
             elapsed = time.time() - start
-            print_step_fail(step, total, message, f"failed after {elapsed:.1f}s")
-            raise
+            line = f"\r  {label} {frame} {message}... ({elapsed:.1f}s)"
+            sys.stderr.write(line)
+            sys.stderr.flush()
+            idx += 1
+            stop_event.wait(SPINNER_INTERVAL)
+        # Clear the spinner line
+        sys.stderr.write("\r" + " " * 60 + "\r")
+        sys.stderr.flush()
+
+    spinner_thread = threading.Thread(target=_animate, daemon=True)
+    spinner_thread.start()
+
+    try:
+        yield None
+    except Exception:
+        stop_event.set()
+        spinner_thread.join()
+        elapsed = time.time() - start
+        print_step_fail(step, total, message, f"failed after {elapsed:.1f}s")
+        raise
+
+    stop_event.set()
+    spinner_thread.join()
     elapsed = time.time() - start
     print_step(step, total, message, f"{elapsed:.1f}s")
 

@@ -162,6 +162,13 @@ def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
         pl.coalesce(["MAX_SPRINT", "MAX_SPRINT_sum"]).alias("MAX_SPRINT"),
     ]).drop(["MIN_SPRINT_sum", "MAX_SPRINT_sum"])
 
+    # Rename columns: SNAKE_CASE -> Title Case
+    rename_map = {
+        col: col.lower().replace("_", " ").title()
+        for col in df.columns
+    }
+    df = df.rename(rename_map)
+
     return df
 
 

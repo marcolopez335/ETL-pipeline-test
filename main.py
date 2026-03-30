@@ -103,6 +103,13 @@ def main():
             epics.run_update_cache(config, force=args.force)
         return
 
+    # Pre-flight credential check — runs outside spinners so stdin is
+    # available if the user needs to re-enter credentials
+    db = config["database"]["name"]
+    if not test_connection(database=db):
+        print_error("Cannot connect to database. Aborting.")
+        return
+
     sql_tables = {}
 
     if run_all or args.stories:
