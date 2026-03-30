@@ -396,8 +396,10 @@ def fill_missing_snapshots(
         ).unique().to_series().to_list()
         existing_dates = {d for d in dates if d is not None}
 
-    # Find missing Mondays
-    missing_mondays = [m for m in mondays if m.date() not in existing_dates]
+    # Find missing Mondays — exclude today because the summary already
+    # represents current-day data; synthesizing today duplicates it
+    today = datetime.now().date()
+    missing_mondays = [m for m in mondays if m.date() not in existing_dates and m.date() != today]
 
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     day_name = day_names[day_of_week]
@@ -417,7 +419,7 @@ def fill_missing_snapshots(
     synthetic_frames = []
     for monday in sorted(missing_mondays):
         snapshot = base.with_columns([
-            pl.lit(monday).alias("SNAPSHOT_DATE"),
+            pl.lit(monday.date()).alias("SNAPSHOT_DATE"),
             pl.lit(True).alias("IS_SYNTHETIC"),
         ])
         synthetic_frames.append(snapshot)
