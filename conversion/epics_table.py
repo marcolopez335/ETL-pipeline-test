@@ -121,18 +121,21 @@ def _build_sprint_lookup(df: pl.DataFrame, partition_cols: list[str]) -> pl.Data
     return lookup
 
 
-def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str]) -> pl.DataFrame:
-    """Build a lookup of SPRINT_NAME_ALT + BEGIN_DATE/END_DATE per partition.
 
-    Used to determine which sprint is 'current' based on date comparison.
+def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str],
+                                 reference_date) -> pl.DataFrame:
+    """Build a lookup of CURRENT_SPRINT per partition.
+
+    Pre-filters to the sprint whose BEGIN_DATE–END_DATE contains reference_date,
+    so the result has at most one row per partition (no fan-out on join).
     """
     lookup = df.with_columns(
         pl.col("SPRINT_NAME")
         .cast(pl.Utf8)
         .str.extract(SPRINT_NAME_ALT_REGEX)
-        .alias("SPRINT_NAME_ALT")
+        .alias("CURRENT_SPRINT")
     ).select(
-        partition_cols + ["SPRINT_NAME_ALT", "BEGIN_DATE", "END_DATE"]
+        partition_cols + ["CURRENT_SPRINT", "BEGIN_DATE", "END_DATE"]
     ).unique()
 
     # Cast dates for consistent comparison
@@ -140,11 +143,11 @@ def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str]) ->
         if col in lookup.columns:
             lookup = lookup.with_columns(pl.col(col).cast(pl.Date, strict=False))
 
-    # Rename to avoid collision with BEGIN_DATE/END_DATE from agile join
-    lookup = lookup.rename({
-        "BEGIN_DATE": "CS_BEGIN_DATE",
-        "END_DATE": "CS_END_DATE",
-    })
+    # Filter to only the sprint that contains the reference date
+    ref = pl.lit(reference_date)
+    lookup = lookup.filter(
+        (ref >= pl.col("BEGIN_DATE")) & (ref <= pl.col("END_DATE"))
+    ).select(partition_cols + ["CURRENT_SPRINT"]).unique()
 
     logger.info(f"Current sprint lookup ({partition_cols}): {lookup.height} rows")
     return lookup
@@ -155,6 +158,9 @@ def fetch_sprint_range(config: dict) -> tuple[pl.DataFrame, pl.DataFrame, pl.Dat
 
     Returns (history_lookup, summary_lookup, current_sprint_hist, current_sprint_sum).
     """
+    from datetime import datetime
+    today = datetime.now().date()
+
     cfg = config["epics"]
     db = config["database"]["name"]
 
@@ -163,12 +169,12 @@ def fetch_sprint_range(config: dict) -> tuple[pl.DataFrame, pl.DataFrame, pl.Dat
     if "SNAPSHOT_DATE" in df_hist.columns:
         df_hist = df_hist.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
     history_lookup = _build_sprint_lookup(df_hist, SPRINT_PARTITION)
-    current_sprint_hist = _build_current_sprint_lookup(df_hist, SPRINT_PARTITION)
+    current_sprint_hist = _build_current_sprint_lookup(df_hist, SPRINT_PARTITION, today)
 
     # Summary: keyed by PROGRAM_INCREMENT only (no snapshot date)
     df_sum = run_query(cfg["sql_agile_sprint_range_summary"], database=db)
     summary_lookup = _build_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"])
-    current_sprint_sum = _build_current_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"])
+    current_sprint_sum = _build_current_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"], today)
 
     return history_lookup, summary_lookup, current_sprint_hist, current_sprint_sum
 
@@ -206,29 +212,14 @@ def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
         pl.coalesce(["MAX_SPRINT", "MAX_SPRINT_sum"]).alias("MAX_SPRINT"),
     ]).drop(["MIN_SPRINT_sum", "MAX_SPRINT_sum"])
 
-    # CURRENT_SPRINT: join per-sprint data and check if LAST_UPDATED falls
-    # within BEGIN_DATE–END_DATE. Try history first, fall back to summary.
+    # CURRENT_SPRINT: pre-filtered to the sprint containing today's date,
+    # so the join is one-to-one (no fan-out). History first, summary fallback.
     df = df.join(current_sprint_hist, on=SPRINT_PARTITION, how="left")
     df = df.join(current_sprint_sum, on=["PROGRAM_INCREMENT"], how="left", suffix="_sum")
 
-    # Coalesce the sprint detail columns from both lookups
-    df = df.with_columns([
-        pl.coalesce(["SPRINT_NAME_ALT", "SPRINT_NAME_ALT_sum"]).alias("SPRINT_NAME_ALT"),
-        pl.coalesce(["CS_BEGIN_DATE", "CS_BEGIN_DATE_sum"]).alias("CS_BEGIN_DATE"),
-        pl.coalesce(["CS_END_DATE", "CS_END_DATE_sum"]).alias("CS_END_DATE"),
-    ]).drop([c for c in df.columns if c.endswith("_sum") and c.startswith(("SPRINT_NAME_ALT", "CS_BEGIN_DATE", "CS_END_DATE"))])
-
-    # Derive CURRENT_SPRINT: if LAST_UPDATED date is between sprint BEGIN_DATE and END_DATE
-    last_updated_date = pl.col("LAST_UPDATED").cast(pl.Date, strict=False)
     df = df.with_columns(
-        pl.when(
-            (last_updated_date >= pl.col("CS_BEGIN_DATE"))
-            & (last_updated_date <= pl.col("CS_END_DATE"))
-        )
-        .then(pl.col("SPRINT_NAME_ALT"))
-        .otherwise(pl.lit(None))
-        .alias("CURRENT_SPRINT")
-    ).drop(["SPRINT_NAME_ALT", "CS_BEGIN_DATE", "CS_END_DATE"])
+        pl.coalesce(["CURRENT_SPRINT", "CURRENT_SPRINT_sum"]).alias("CURRENT_SPRINT"),
+    ).drop(["CURRENT_SPRINT_sum"], strict=False)
 
     # Rename columns: SNAKE_CASE -> Title Case
     rename_map = {
@@ -305,7 +296,14 @@ def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
     # Inner join back to the split data
     result = split.join(summary, on="Feature Key", how="inner")
 
-    logger.info(f"ACRP result: {result.height} rows, {result['Feature Key'].n_unique()} features")
+    # Rename columns: Title Case -> SNAKE_CASE
+    rename_map = {
+        col: col.upper().replace(" ", "_")
+        for col in result.columns
+    }
+    result = result.rename(rename_map)
+
+    logger.info(f"ACRP result: {result.height} rows, {result['FEATURE_KEY'].n_unique()} features")
     return result
 
 
