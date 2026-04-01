@@ -29,6 +29,7 @@ SPRINT_PARTITION = ["SNAPSHOT_DATE", "PROGRAM_INCREMENT"]
 IP_SPRINT_LABEL = "IP"
 IP_SPRINT_SORT_VALUE = 99
 SPRINT_VERSION_REGEX = r"(\d{2,4}\.\d+\.(?:\d+|IP))\s*$"
+SPRINT_NAME_ALT_REGEX = r"(\d{2}\.\d.\w+)"
 
 
 def _sprint_sort_key() -> pl.Expr:
@@ -120,8 +121,34 @@ def _build_sprint_lookup(df: pl.DataFrame, partition_cols: list[str]) -> pl.Data
     return lookup
 
 
-def fetch_sprint_range(config: dict) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Fetch sprint range lookups for both history and summary."""
+def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str]) -> pl.DataFrame:
+    """Build a lookup of SPRINT_NAME_ALT + BEGIN_DATE/END_DATE per partition.
+
+    Used to determine which sprint is 'current' based on date comparison.
+    """
+    lookup = df.with_columns(
+        pl.col("SPRINT_NAME")
+        .cast(pl.Utf8)
+        .str.extract(SPRINT_NAME_ALT_REGEX)
+        .alias("SPRINT_NAME_ALT")
+    ).select(
+        partition_cols + ["SPRINT_NAME_ALT", "BEGIN_DATE", "END_DATE"]
+    ).unique()
+
+    # Cast dates for consistent comparison
+    for col in ["BEGIN_DATE", "END_DATE"]:
+        if col in lookup.columns:
+            lookup = lookup.with_columns(pl.col(col).cast(pl.Date, strict=False))
+
+    logger.info(f"Current sprint lookup ({partition_cols}): {lookup.height} rows")
+    return lookup
+
+
+def fetch_sprint_range(config: dict) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """Fetch sprint range lookups for both history and summary.
+
+    Returns (history_lookup, summary_lookup, current_sprint_hist, current_sprint_sum).
+    """
     cfg = config["epics"]
     db = config["database"]["name"]
 
@@ -130,16 +157,20 @@ def fetch_sprint_range(config: dict) -> tuple[pl.DataFrame, pl.DataFrame]:
     if "SNAPSHOT_DATE" in df_hist.columns:
         df_hist = df_hist.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
     history_lookup = _build_sprint_lookup(df_hist, SPRINT_PARTITION)
+    current_sprint_hist = _build_current_sprint_lookup(df_hist, SPRINT_PARTITION)
 
     # Summary: keyed by PROGRAM_INCREMENT only (no snapshot date)
     df_sum = run_query(cfg["sql_agile_sprint_range_summary"], database=db)
     summary_lookup = _build_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"])
+    current_sprint_sum = _build_current_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"])
 
-    return history_lookup, summary_lookup
+    return history_lookup, summary_lookup, current_sprint_hist, current_sprint_sum
 
 
 def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
-                   sprint_summary_lookup: pl.DataFrame) -> pl.DataFrame:
+                   sprint_summary_lookup: pl.DataFrame,
+                   current_sprint_hist: pl.DataFrame,
+                   current_sprint_sum: pl.DataFrame) -> pl.DataFrame:
     """Apply all post-union transformations."""
     from datetime import datetime
 
@@ -148,7 +179,14 @@ def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
     local_tz = now.astimezone().tzname()
     logger.info(f"LAST_UPDATED set to {now} (timezone: {local_tz})")
 
-    df = df.with_columns(pl.lit(now).alias("LAST_UPDATED"))
+    df = df.with_columns([
+        pl.lit(now).alias("LAST_UPDATED"),
+        pl.when(pl.col("SNAPSHOT_DATE").is_null())
+          .then(pl.lit(now))
+          .otherwise(pl.col("SNAPSHOT_DATE"))
+          .alias("SNAPSHOT_DATE_ALT"),
+        pl.col("SNAPSHOT_DATE").fill_null(pl.lit(now.date())),
+    ])
 
     # Join sprint range: history rows match on SNAPSHOT_DATE + PROGRAM_INCREMENT,
     # summary rows (null SNAPSHOT_DATE) match on PROGRAM_INCREMENT only.
@@ -161,6 +199,30 @@ def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
         pl.coalesce(["MIN_SPRINT", "MIN_SPRINT_sum"]).alias("MIN_SPRINT"),
         pl.coalesce(["MAX_SPRINT", "MAX_SPRINT_sum"]).alias("MAX_SPRINT"),
     ]).drop(["MIN_SPRINT_sum", "MAX_SPRINT_sum"])
+
+    # CURRENT_SPRINT: join per-sprint data and check if LAST_UPDATED falls
+    # within BEGIN_DATE–END_DATE. Try history first, fall back to summary.
+    df = df.join(current_sprint_hist, on=SPRINT_PARTITION, how="left")
+    df = df.join(current_sprint_sum, on=["PROGRAM_INCREMENT"], how="left", suffix="_sum")
+
+    # Coalesce the sprint detail columns from both lookups
+    df = df.with_columns([
+        pl.coalesce(["SPRINT_NAME_ALT", "SPRINT_NAME_ALT_sum"]).alias("SPRINT_NAME_ALT"),
+        pl.coalesce(["BEGIN_DATE", "BEGIN_DATE_sum"]).alias("BEGIN_DATE_SPRINT"),
+        pl.coalesce(["END_DATE", "END_DATE_sum"]).alias("END_DATE_SPRINT"),
+    ]).drop([c for c in df.columns if c.endswith("_sum") and c.startswith(("SPRINT_NAME_ALT", "BEGIN_DATE", "END_DATE"))])
+
+    # Derive CURRENT_SPRINT: if LAST_UPDATED date is between sprint BEGIN_DATE and END_DATE
+    last_updated_date = pl.col("LAST_UPDATED").cast(pl.Date, strict=False)
+    df = df.with_columns(
+        pl.when(
+            (last_updated_date >= pl.col("BEGIN_DATE_SPRINT"))
+            & (last_updated_date <= pl.col("END_DATE_SPRINT"))
+        )
+        .then(pl.col("SPRINT_NAME_ALT"))
+        .otherwise(pl.lit(None))
+        .alias("CURRENT_SPRINT")
+    ).drop(["SPRINT_NAME_ALT", "BEGIN_DATE_SPRINT", "END_DATE_SPRINT"])
 
     # Rename columns: SNAKE_CASE -> Title Case
     rename_map = {
@@ -291,7 +353,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     with step_spinner(4, total, "Fetching agile data"):
         df_agile_history = fetch_agile(config, history=True)
         df_agile_summary = fetch_agile(config, history=False)
-        sprint_history_lookup, sprint_summary_lookup = fetch_sprint_range(config)
+        sprint_history_lookup, sprint_summary_lookup, current_sprint_hist, current_sprint_sum = fetch_sprint_range(config)
     log_dataframe_summary(df_agile_history, "Agile History")
     log_dataframe_summary(df_agile_summary, "Agile Summary")
 
@@ -305,7 +367,8 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
 
     with step_spinner(6, total, "Unioning & transforming"):
         df = union_data(df_summary, df_history)
-        df = data_functions(df, sprint_history_lookup, sprint_summary_lookup)
+        df = data_functions(df, sprint_history_lookup, sprint_summary_lookup,
+                           current_sprint_hist, current_sprint_sum)
 
     log_dataframe_summary(df, "Epics Final")
 
