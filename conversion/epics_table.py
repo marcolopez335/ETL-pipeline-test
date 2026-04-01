@@ -215,29 +215,29 @@ def join_agile(df: pl.DataFrame, df_agile: pl.DataFrame, has_snapshot: bool = Tr
 def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
     # Filter: null snapshot date AND row is a feature or subcapability level
     filtered = df.filter(
-        pl.col("SNAPSHOT_DATE").is_null()
-        & (pl.col("FEATURE_KEY").is_not_null() | pl.col("SUBCAPABILITY_KEY").is_not_null())
+        pl.col("Snapshot Date").is_null()
+        & (pl.col("Feature Key").is_not_null() | pl.col("Subcapability Key").is_not_null())
     )
 
     logger.info(f"ACRP filter: {filtered.height} rows from {df.height} (null snapshot, feature/subcap)")
 
     # Split FEATURE_FIX_VERSION on comma into separate rows
     split = filtered.with_columns(
-        pl.col("FEATURE_FIX_VERSION").cast(pl.Utf8).str.split(",")
-    ).explode("FEATURE_FIX_VERSION").with_columns(
-        pl.col("FEATURE_FIX_VERSION").str.strip_chars()
+        pl.col("Feature Fix Version").cast(pl.Utf8).str.split(",")
+    ).explode("Feature Fix Version").with_columns(
+        pl.col("Feature Fix Version").str.strip_chars()
     )
 
     # Summarize: min and max target release per feature number
-    summary = split.group_by("FEATURE_KEY").agg([
-        pl.col("FEATURE_FIX_VERSION").min().alias("MIN_TARGET_RELEASE"),
-        pl.col("FEATURE_FIX_VERSION").max().alias("MAX_TARGET_RELEASE"),
+    summary = split.group_by("Feature Key").agg([
+        pl.col("Feature Fix Version").min().alias("Min Target Release"),
+        pl.col("Feature Fix Version").max().alias("Max Target Release"),
     ])
 
     # Inner join back to the split data
-    result = split.join(summary, on="FEATURE_KEY", how="inner")
+    result = split.join(summary, on="Feature Key", how="inner")
 
-    logger.info(f"ACRP result: {result.height} rows, {result['FEATURE_KEY'].n_unique()} features")
+    logger.info(f"ACRP result: {result.height} rows, {result['Feature Key'].n_unique()} features")
     return result
 
 
