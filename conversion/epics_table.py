@@ -140,6 +140,12 @@ def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str]) ->
         if col in lookup.columns:
             lookup = lookup.with_columns(pl.col(col).cast(pl.Date, strict=False))
 
+    # Rename to avoid collision with BEGIN_DATE/END_DATE from agile join
+    lookup = lookup.rename({
+        "BEGIN_DATE": "CS_BEGIN_DATE",
+        "END_DATE": "CS_END_DATE",
+    })
+
     logger.info(f"Current sprint lookup ({partition_cols}): {lookup.height} rows")
     return lookup
 
@@ -208,21 +214,21 @@ def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
     # Coalesce the sprint detail columns from both lookups
     df = df.with_columns([
         pl.coalesce(["SPRINT_NAME_ALT", "SPRINT_NAME_ALT_sum"]).alias("SPRINT_NAME_ALT"),
-        pl.coalesce(["BEGIN_DATE", "BEGIN_DATE_sum"]).alias("BEGIN_DATE_SPRINT"),
-        pl.coalesce(["END_DATE", "END_DATE_sum"]).alias("END_DATE_SPRINT"),
-    ]).drop([c for c in df.columns if c.endswith("_sum") and c.startswith(("SPRINT_NAME_ALT", "BEGIN_DATE", "END_DATE"))])
+        pl.coalesce(["CS_BEGIN_DATE", "CS_BEGIN_DATE_sum"]).alias("CS_BEGIN_DATE"),
+        pl.coalesce(["CS_END_DATE", "CS_END_DATE_sum"]).alias("CS_END_DATE"),
+    ]).drop([c for c in df.columns if c.endswith("_sum") and c.startswith(("SPRINT_NAME_ALT", "CS_BEGIN_DATE", "CS_END_DATE"))])
 
     # Derive CURRENT_SPRINT: if LAST_UPDATED date is between sprint BEGIN_DATE and END_DATE
     last_updated_date = pl.col("LAST_UPDATED").cast(pl.Date, strict=False)
     df = df.with_columns(
         pl.when(
-            (last_updated_date >= pl.col("BEGIN_DATE_SPRINT"))
-            & (last_updated_date <= pl.col("END_DATE_SPRINT"))
+            (last_updated_date >= pl.col("CS_BEGIN_DATE"))
+            & (last_updated_date <= pl.col("CS_END_DATE"))
         )
         .then(pl.col("SPRINT_NAME_ALT"))
         .otherwise(pl.lit(None))
         .alias("CURRENT_SPRINT")
-    ).drop(["SPRINT_NAME_ALT", "BEGIN_DATE_SPRINT", "END_DATE_SPRINT"])
+    ).drop(["SPRINT_NAME_ALT", "CS_BEGIN_DATE", "CS_END_DATE"])
 
     # Rename columns: SNAKE_CASE -> Title Case
     rename_map = {
