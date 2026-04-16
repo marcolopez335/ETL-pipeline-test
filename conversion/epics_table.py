@@ -273,6 +273,15 @@ def join_agile(df: pl.DataFrame, df_agile: pl.DataFrame, has_snapshot: bool = Tr
 
 
 def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
+    # Diagnostic: null counts for the columns the filter cares about
+    null_snap = df.select(pl.col("Snapshot Date").is_null().sum()).item()
+    null_feat = df.select(pl.col("Feature Key").is_null().sum()).item()
+    null_subcap = df.select(pl.col("Subcapability Key").is_null().sum()).item()
+    logger.info(
+        f"ACRP diag: total={df.height} null Snapshot Date={null_snap} "
+        f"null Feature Key={null_feat} null Subcapability Key={null_subcap}"
+    )
+
     # Filter: null snapshot date AND row is a feature or subcapability level
     filtered = df.filter(
         pl.col("Snapshot Date").is_null()
