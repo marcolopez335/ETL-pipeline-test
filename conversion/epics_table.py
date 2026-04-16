@@ -191,13 +191,14 @@ def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
     local_tz = now.astimezone().tzname()
     logger.info(f"LAST_UPDATED set to {now} (timezone: {local_tz})")
 
+    # SNAPSHOT_DATE nulls are preserved here so build_acrp can identify summary
+    # rows; they get filled in run() after ACRP is built.
     df = df.with_columns([
         pl.lit(now).alias("LAST_UPDATED"),
         pl.when(pl.col("SNAPSHOT_DATE").is_null())
           .then(pl.lit(now))
           .otherwise(pl.col("SNAPSHOT_DATE"))
           .alias("SNAPSHOT_DATE_ALT"),
-        pl.col("SNAPSHOT_DATE").fill_null(pl.lit(now.date())),
     ])
 
     # Join sprint range: history rows match on SNAPSHOT_DATE + PROGRAM_INCREMENT,
@@ -374,14 +375,19 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
         df = data_functions(df, sprint_history_lookup, sprint_summary_lookup,
                            current_sprint_hist, current_sprint_sum)
 
-    log_dataframe_summary(df, "Epics Final")
-
-    with step_spinner(7, total, "Exporting EPICS.hyper"):
-        export_hyper(df, hyper_path, "Epics", config)
-
-    with step_spinner(8, total, "Building ACRP release range"):
+    # Build ACRP before filling Snapshot Date nulls — its filter relies on the
+    # null marker to identify summary rows.
+    with step_spinner(7, total, "Building ACRP release range"):
         df_acrp = build_acrp(df)
     log_dataframe_summary(df_acrp, "Epics ACRP")
+
+    df = df.with_columns(
+        pl.col("Snapshot Date").fill_null(pl.col("Last Updated").cast(pl.Date, strict=False))
+    )
+    log_dataframe_summary(df, "Epics Final")
+
+    with step_spinner(8, total, "Exporting EPICS.hyper"):
+        export_hyper(df, hyper_path, "Epics", config)
 
     with step_spinner(9, total, "Exporting EPICS_ACRP.hyper"):
         export_hyper(df_acrp, acrp_hyper_path, "Epics_ACRP", config)
