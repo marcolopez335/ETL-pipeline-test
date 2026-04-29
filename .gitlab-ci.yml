@@ -23,6 +23,6 @@ lint:
 test:fill-snapshots:
   stage: test
   before_script:
-    - pip install polars
+    - pip install polars rich pyyaml
   script:
     - python test_fill_snapshots.py

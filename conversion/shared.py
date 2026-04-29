@@ -1,34 +1,82 @@
+import gc
 import shutil
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import polars as pl
-import pantab as pt
 import yaml
-from pathlib import Path
-from common.database.tibco import TibcoConnection
-from common.logging import get_logger
-from common.tableau.publish import (
-    TableauPublishConfig, publish_hyper_to_tableau, TABLEAU_SERVICE_NAME,
-)
+
+# common.* and the rich-driven console module are imported lazily so this
+# module can be imported (and its pure-Polars helpers tested) without the
+# proprietary `common` package or the rich runtime.
+try:
+    from common.logging import get_logger
+except ImportError:  # pragma: no cover — fallback for unit-test environments
+    import logging
+    def get_logger(name: str) -> logging.Logger:
+        logger = logging.getLogger(name)
+        if not logger.handlers:
+            logging.basicConfig(level=logging.INFO)
+        return logger
+
 from conversion.console import (
     print_polars_summary, print_info, print_success, print_error,
 )
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+
+# Default locations — override via config.yaml `paths:` section.
 SQL_DIR = ROOT_DIR / "sql"
 CACHE_DIR = ROOT_DIR / "cache"
 BACKUP_DIR = ROOT_DIR / "backups"
+OUTPUT_DIR = ROOT_DIR / "output"
 
 logger = get_logger(__name__)
 
 
 def load_config() -> dict:
+    """Load config.yaml and apply path overrides to module-level dirs.
+
+    Path keys in ``paths:`` are resolved relative to the project root.
+    Reassigning the module globals keeps the public ``CACHE_DIR`` /
+    ``OUTPUT_DIR`` / ``BACKUP_DIR`` / ``SQL_DIR`` constants consistent
+    with what callers see after ``load_config()`` runs.
+    """
     config_path = ROOT_DIR / "config.yaml"
     if not config_path.is_file():
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
     with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f) or {}
+
+    paths = cfg.get("paths") or {}
+    global SQL_DIR, CACHE_DIR, BACKUP_DIR, OUTPUT_DIR
+    if "sql_dir" in paths:
+        SQL_DIR = ROOT_DIR / paths["sql_dir"]
+    if "cache_dir" in paths:
+        CACHE_DIR = ROOT_DIR / paths["cache_dir"]
+    if "backup_dir" in paths:
+        BACKUP_DIR = ROOT_DIR / paths["backup_dir"]
+    if "output_dir" in paths:
+        OUTPUT_DIR = ROOT_DIR / paths["output_dir"]
+
+    return cfg
+
+
+def get_cache_path(filename: str) -> Path:
+    """Return the absolute path for a cache file under the configured CACHE_DIR."""
+    return CACHE_DIR / filename
+
+
+def get_output_path(filename: str) -> Path:
+    """Return the absolute path for an output file under the configured OUTPUT_DIR."""
+    return OUTPUT_DIR / filename
+
+
+def _use_stored_credentials(config: dict | None) -> bool:
+    if not config:
+        return True
+    return bool(config.get("database", {}).get("use_stored_credentials", True))
 
 
 def load_sql(filename: str) -> str:
@@ -39,12 +87,15 @@ def load_sql(filename: str) -> str:
     return sql_path.read_text(encoding="utf-8")
 
 
-def run_query(sql_filename: str, database: str = "default", verbose: bool = True) -> pl.DataFrame:
-    import gc
+def run_query(
+    sql_filename: str, database: str = "default", verbose: bool = True,
+    config: dict | None = None,
+) -> pl.DataFrame:
+    from common.database.tibco import TibcoConnection
     logger.info(f"Running query: {sql_filename}")
     query = load_sql(sql_filename)
     conn = TibcoConnection()
-    conn.connect(database=database, use_stored_credentials=True)
+    conn.connect(database=database, use_stored_credentials=_use_stored_credentials(config))
 
     try:
         pdf = conn.execute_query(query, verbose=verbose)
@@ -66,11 +117,12 @@ def run_query(sql_filename: str, database: str = "default", verbose: bool = True
     return df
 
 
-def test_connection(database: str = "default") -> bool:
+def test_connection(database: str = "default", config: dict | None = None) -> bool:
+    from common.database.tibco import TibcoConnection
     logger.info("Testing database connection")
     conn = TibcoConnection()
     try:
-        conn.connect(database=database, use_stored_credentials=True)
+        conn.connect(database=database, use_stored_credentials=_use_stored_credentials(config))
         logger.info("Connection successful")
         print_success(f"Connected to database: [bold]{database}[/]")
         return True
@@ -205,33 +257,47 @@ def _safe_dtype(dtype: pl.DataType) -> pl.DataType:
     return pl.Utf8 if dtype == pl.Null else dtype
 
 
+def _supertype(a: pl.DataType, b: pl.DataType) -> pl.DataType:
+    """Pick a target dtype that both ``a`` and ``b`` can be cast to losslessly.
+
+    Rules (in order):
+      1. Identical dtypes → return as-is.
+      2. Either is Null → use the other.
+      3. Both numeric → Float64 (covers Int / Float mix).
+      4. Both temporal → Datetime (covers Date / Datetime mix).
+      5. Otherwise → Utf8 (last-resort string fallback).
+    """
+    if a == b:
+        return a
+    if a == pl.Null:
+        return b
+    if b == pl.Null:
+        return a
+    if a.is_numeric() and b.is_numeric():
+        return pl.Float64
+    if a.is_temporal() and b.is_temporal():
+        return pl.Datetime
+    return pl.Utf8
+
+
 def _align_schemas(df1: pl.DataFrame, df2: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Align two DataFrames to the same columns and types before concat."""
     all_cols = dict.fromkeys(df1.columns + df2.columns)
 
-    # Batch casts/additions to avoid creating a new DataFrame per column
-    df1_casts = []
-    df2_casts = []
+    df1_casts: list[pl.Expr] = []
+    df2_casts: list[pl.Expr] = []
 
     for col in all_cols:
-        if col in df1.columns and col in df2.columns:
-            if df1[col].dtype == pl.Null and df2[col].dtype == pl.Null:
-                df1_casts.append(pl.col(col).cast(pl.Utf8))
-                df2_casts.append(pl.col(col).cast(pl.Utf8))
-            elif df1[col].dtype != df2[col].dtype:
-                if df1[col].dtype == pl.Null:
-                    df1_casts.append(pl.col(col).cast(df2[col].dtype))
-                elif df2[col].dtype == pl.Null:
-                    df2_casts.append(pl.col(col).cast(df1[col].dtype))
-                else:
-                    try:
-                        super_type = pl.datatypes.unify_dtypes([df1[col].dtype, df2[col].dtype])
-                        df1_casts.append(pl.col(col).cast(super_type, strict=False))
-                        df2_casts.append(pl.col(col).cast(super_type, strict=False))
-                    except Exception:
-                        df1_casts.append(pl.col(col).cast(pl.Utf8, strict=False))
-                        df2_casts.append(pl.col(col).cast(pl.Utf8, strict=False))
-        elif col not in df1.columns:
+        in_df1 = col in df1.columns
+        in_df2 = col in df2.columns
+
+        if in_df1 and in_df2:
+            target = _supertype(df1[col].dtype, df2[col].dtype)
+            if df1[col].dtype != target:
+                df1_casts.append(pl.col(col).cast(target, strict=False))
+            if df2[col].dtype != target:
+                df2_casts.append(pl.col(col).cast(target, strict=False))
+        elif in_df2:
             df1_casts.append(pl.lit(None).cast(_safe_dtype(df2[col].dtype)).alias(col))
         else:
             df2_casts.append(pl.lit(None).cast(_safe_dtype(df1[col].dtype)).alias(col))
@@ -263,7 +329,6 @@ def update_history_cache_with_recent(
     cached_lf: pl.LazyFrame, recent: pl.DataFrame, key_col: str,
     config: dict = None,
 ) -> pl.DataFrame:
-    import gc
     KEY_COLS = [key_col, "SNAPSHOT_DATE"]
 
     # Cast SNAPSHOT_DATE to Date (not Datetime) — snapshots are daily, and
@@ -446,6 +511,9 @@ def union_data(df_summary: pl.DataFrame, df_history: pl.DataFrame) -> pl.DataFra
 
 
 def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: dict) -> None:
+    import pantab as pt
+    import pyarrow as pa
+
     hyper_path.parent.mkdir(parents=True, exist_ok=True)
     backup_file(hyper_path, config)
     # Cast Null-typed columns to String so pantab doesn't choke on Arrow na type
@@ -454,7 +522,6 @@ def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: di
         df = df.with_columns([pl.col(c).cast(pl.Utf8) for c in null_cols])
     # Use Arrow directly — Polars -> Arrow is near zero-copy (both Arrow-backed),
     # whereas .to_pandas() materializes numpy arrays and can trigger ArrayMemoryError
-    import pyarrow as pa
     arrow_table = df.to_arrow()
     # Cast null-typed Arrow columns to string to avoid pantab "unsupported type: null"
     for i, field in enumerate(arrow_table.schema):
@@ -475,6 +542,8 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict,
                  If None, publishes to all configured servers.
         datasource_name: Name of the datasource on Tableau Server.
     """
+    from common.tableau.publish import TableauPublishConfig, publish_hyper_to_tableau
+
     tab_cfg = config["tableau"]
 
     if targets is None:
