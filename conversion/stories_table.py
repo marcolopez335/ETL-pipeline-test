@@ -1,26 +1,17 @@
 import time
 from datetime import datetime
 import polars as pl
-from pathlib import Path
-from common.logging import get_logger, setup_logging, INFO
+from common.logging import get_logger
 from schemas.datatypes import EXPECTED_DTYPES_STORIES
 from conversion.shared import (
-    CACHE_DIR, run_query, clean_dtypes, update_history, union_data,
-    export_hyper, load_config, log_dataframe_summary, publish_hyper,
+    OUTPUT_DIR, get_cache_path, run_query, clean_dtypes, update_history,
+    union_data, export_hyper, log_dataframe_summary, publish_hyper,
     fill_missing_snapshots,
 )
 from conversion.console import (
     print_header, step_spinner, print_info, print_pipeline_complete,
 )
 
-SCRIPT_DIR = Path(__file__).parent
-OUTPUT_DIR = SCRIPT_DIR / "output"
-
-setup_logging(
-    workflow_name=Path(__file__).stem,
-    log_dir=SCRIPT_DIR / "logs",
-    console_level=INFO,
-)
 logger = get_logger(__name__)
 
 TOTAL_STEPS_BASE = 6
@@ -34,12 +25,12 @@ PI_PREFIX_LENGTH = 4
 
 def fetch_summary_full(config: dict) -> pl.DataFrame:
     cfg = config["stories"]
-    return run_query(cfg["sql_summary"], database=config["database"]["name"])
+    return run_query(cfg["sql_summary"], database=config["database"]["name"], config=config)
 
 
 def fetch_epics_full(config: dict) -> pl.DataFrame:
     cfg = config["stories"]
-    return run_query(cfg["sql_epics"], database=config["database"]["name"])
+    return run_query(cfg["sql_epics"], database=config["database"]["name"], config=config)
 
 
 def join_stories_data(stories: pl.DataFrame, epics: pl.DataFrame) -> pl.DataFrame:
@@ -82,7 +73,7 @@ def data_functions(df: pl.DataFrame) -> pl.DataFrame:
 
 def run_update_cache(config: dict, force: bool = False):
     cfg = config["stories"]
-    cache_path = CACHE_DIR / cfg["cache_filename"]
+    cache_path = get_cache_path(cfg["cache_filename"])
     print_header("Stories Cache Update (Polars)")
     logger.info("Updating stories history cache")
     with step_spinner(1, 1, "Updating history cache"):
@@ -97,7 +88,7 @@ def run_update_cache(config: dict, force: bool = False):
 def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
         force: bool = False) -> pl.DataFrame:
     cfg = config["stories"]
-    cache_path = CACHE_DIR / cfg["cache_filename"]
+    cache_path = get_cache_path(cfg["cache_filename"])
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
     total = TOTAL_STEPS_PUBLISH if publish else TOTAL_STEPS_BASE
     start = time.time()

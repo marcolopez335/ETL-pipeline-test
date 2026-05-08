@@ -1,25 +1,17 @@
 import time
+from datetime import datetime
 import polars as pl
-from pathlib import Path
-from common.logging import get_logger, setup_logging, INFO
+from common.logging import get_logger
 from schemas.datatypes import EXPECTED_DTYPES_EPICS
 from conversion.shared import (
-    CACHE_DIR, run_query, clean_dtypes, update_history, union_data,
-    export_hyper, load_config, log_dataframe_summary, publish_hyper,
+    OUTPUT_DIR, get_cache_path, run_query, clean_dtypes, update_history,
+    union_data, export_hyper, log_dataframe_summary, publish_hyper,
     fill_missing_snapshots,
 )
 from conversion.console import (
-    print_header, step_spinner, print_info, print_pipeline_complete,
+    print_header, step_spinner, print_pipeline_complete,
 )
 
-SCRIPT_DIR = Path(__file__).parent
-OUTPUT_DIR = SCRIPT_DIR / "output"
-
-setup_logging(
-    workflow_name=Path(__file__).stem,
-    log_dir=SCRIPT_DIR / "logs",
-    console_level=INFO,
-)
 logger = get_logger(__name__)
 
 SPRINT_PARTITION = ["SNAPSHOT_DATE", "PROGRAM_INCREMENT"]
@@ -158,21 +150,20 @@ def fetch_sprint_range(config: dict) -> tuple[pl.DataFrame, pl.DataFrame, pl.Dat
 
     Returns (history_lookup, summary_lookup, current_sprint_hist, current_sprint_sum).
     """
-    from datetime import datetime
     today = datetime.now().date()
 
     cfg = config["epics"]
     db = config["database"]["name"]
 
     # History: keyed by SNAPSHOT_DATE + PROGRAM_INCREMENT
-    df_hist = run_query(cfg["sql_agile_sprint_range"], database=db)
+    df_hist = run_query(cfg["sql_agile_sprint_range"], database=db, config=config)
     if "SNAPSHOT_DATE" in df_hist.columns:
         df_hist = df_hist.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
     history_lookup = _build_sprint_lookup(df_hist, SPRINT_PARTITION)
     current_sprint_hist = _build_current_sprint_lookup(df_hist, SPRINT_PARTITION, today)
 
     # Summary: keyed by PROGRAM_INCREMENT only (no snapshot date)
-    df_sum = run_query(cfg["sql_agile_sprint_range_summary"], database=db)
+    df_sum = run_query(cfg["sql_agile_sprint_range_summary"], database=db, config=config)
     summary_lookup = _build_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"])
     current_sprint_sum = _build_current_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"], today)
 
@@ -184,8 +175,6 @@ def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
                    current_sprint_hist: pl.DataFrame,
                    current_sprint_sum: pl.DataFrame) -> pl.DataFrame:
     """Apply all post-union transformations."""
-    from datetime import datetime
-
     # LAST_UPDATED timestamp
     now = datetime.now()
     local_tz = now.astimezone().tzname()
@@ -234,14 +223,14 @@ def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
 
 def fetch_summary_full(config: dict) -> pl.DataFrame:
     cfg = config["epics"]
-    return run_query(cfg["sql_summary"], database=config["database"]["name"])
+    return run_query(cfg["sql_summary"], database=config["database"]["name"], config=config)
 
 
 def fetch_agile(config: dict, history: bool = True) -> pl.DataFrame:
     """Fetch agile sprint data (history or summary) as a separate query."""
     cfg = config["epics"]
     sql_key = "sql_agile_history" if history else "sql_agile_summary"
-    df = run_query(cfg[sql_key], database=config["database"]["name"])
+    df = run_query(cfg[sql_key], database=config["database"]["name"], config=config)
     # Cast SNAPSHOT_DATE to Date to match epic data (avoids type mismatch on join)
     if "SNAPSHOT_DATE" in df.columns:
         df = df.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
@@ -319,7 +308,7 @@ def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
 
 def run_update_cache(config: dict, force: bool = False):
     cfg = config["epics"]
-    cache_path = CACHE_DIR / cfg["cache_filename"]
+    cache_path = get_cache_path(cfg["cache_filename"])
     print_header("Epics Cache Update (Polars)")
     logger.info("Updating epics history cache")
     with step_spinner(1, 1, "Updating history cache"):
@@ -338,7 +327,7 @@ def _calc_steps(publish: bool) -> int:
 def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
         force: bool = False) -> tuple[pl.DataFrame, pl.DataFrame]:
     cfg = config["epics"]
-    cache_path = CACHE_DIR / cfg["cache_filename"]
+    cache_path = get_cache_path(cfg["cache_filename"])
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
     acrp_hyper_path = OUTPUT_DIR / cfg["acrp_hyper_filename"]
     total = _calc_steps(publish)

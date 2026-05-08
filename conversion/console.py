@@ -10,6 +10,9 @@ from rich.table import Table
 from rich.text import Text
 from rich import box
 
+# Re-export interactive_sql from the sql_shell package for backwards compatibility.
+from sql_shell import interactive_sql  # noqa: F401
+
 console = Console()
 
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -47,14 +50,14 @@ def print_header(title: str) -> None:
 
 def print_step(step: int, total: int, message: str, detail: str = "") -> None:
     step_label = f"[dim]\\[{step}/{total}][/]"
-    check = "[green bold]\\u2713[/]"
+    check = "[green bold]✓[/]"
     detail_text = f"  [dim]{detail}[/]" if detail else ""
     console.print(f"  {step_label} {check} {message}{detail_text}")
 
 
 def print_step_fail(step: int, total: int, message: str, error: str = "") -> None:
     step_label = f"[dim]\\[{step}/{total}][/]"
-    cross = "[red bold]\\u2717[/]"
+    cross = "[red bold]✗[/]"
     detail_text = f"  [red]{error}[/]" if error else ""
     console.print(f"  {step_label} {cross} {message}{detail_text}")
 
@@ -203,21 +206,16 @@ def print_info(message: str) -> None:
 
 
 def print_success(message: str) -> None:
-    console.print(f"  [green bold]\\u2713[/] {message}")
+    console.print(f"  [green bold]✓[/] {message}")
 
 
 def print_error(message: str) -> None:
-    console.print(f"  [red bold]\\u2717[/] {message}")
+    console.print(f"  [red bold]✗[/] {message}")
 
 
 def print_pipeline_complete(name: str, elapsed: float) -> None:
     console.print()
     console.print(
-        f"  [green bold]\\u2713 {name} complete[/]  [dim]({elapsed:.1f}s)[/]"
+        f"  [green bold]✓ {name} complete[/]  [dim]({elapsed:.1f}s)[/]"
     )
     console.print()
-
-
-
-# Re-export interactive_sql from the sql_shell package for backwards compatibility
-from sql_shell import interactive_sql  # noqa: F401
