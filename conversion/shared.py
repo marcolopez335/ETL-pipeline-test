@@ -1,5 +1,5 @@
-import gc
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -79,6 +79,28 @@ def _use_stored_credentials(config: dict | None) -> bool:
     return bool(config.get("database", {}).get("use_stored_credentials", True))
 
 
+def parallel_fetch(jobs: dict, config: dict | None = None) -> dict:
+    """Run independent fetch callables concurrently and return results by key.
+
+    Each callable opens its own ODBC connection, so jobs are fully
+    independent. ODBC drivers release the GIL during fetch, so threads
+    give real overlap on the network/DB wait.
+
+    Set ``database.parallel_fetch: false`` in config.yaml to force
+    sequential fetching (e.g. if the DB limits concurrent sessions);
+    ``database.max_parallel_queries`` caps the worker count (default 4).
+    """
+    db_cfg = (config or {}).get("database", {})
+    if not db_cfg.get("parallel_fetch", True) or len(jobs) <= 1:
+        return {key: fn() for key, fn in jobs.items()}
+
+    max_workers = min(int(db_cfg.get("max_parallel_queries", 4)), len(jobs))
+    logger.info(f"Fetching {len(jobs)} queries in parallel ({max_workers} workers)")
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {key: pool.submit(fn) for key, fn in jobs.items()}
+        return {key: fut.result() for key, fut in futures.items()}
+
+
 def load_sql(filename: str) -> str:
     sql_path = SQL_DIR / filename
     if not sql_path.is_file():
@@ -102,7 +124,6 @@ def run_query(
         df = pl.from_pandas(pdf)
         # Free the pandas copy immediately — it can be as large as the Polars one
         del pdf
-        gc.collect()
         # Cast any Null-typed columns (all-null from pandas) to Utf8 early
         null_cols = [c for c in df.columns if df[c].dtype == pl.Null]
         if null_cols:
@@ -153,10 +174,27 @@ def clean_dtypes(df: pl.DataFrame, schema: dict) -> pl.DataFrame:
     return df
 
 
+# Full per-column stats (null %, n_unique, min/max) are expensive at 4M+ rows
+# and run once per pipeline step. Off by default; enabled via --verbose.
+_VERBOSE_SUMMARIES = False
+
+
+def set_verbose_summaries(verbose: bool) -> None:
+    global _VERBOSE_SUMMARIES
+    _VERBOSE_SUMMARIES = bool(verbose)
+
+
 def log_dataframe_summary(df: pl.DataFrame, label: str) -> None:
     total_mem = df.estimated_size()
     logger.info(f"--- {label} Summary ---")
     logger.info(f"  Rows: {df.height}  Columns: {df.width}  Memory: {total_mem:,} bytes")
+
+    if not _VERBOSE_SUMMARIES:
+        print_info(
+            f"[bold]{label}[/]: {df.height:,} rows x {df.width} cols  "
+            f"[dim]({total_mem / 1024 ** 2:.1f} MB)[/]"
+        )
+        return
 
     # Compute stats once and share with both logger and console display
     null_counts = df.null_count()
@@ -312,17 +350,34 @@ def _align_schemas(df1: pl.DataFrame, df2: pl.DataFrame) -> tuple[pl.DataFrame, 
     return df1, df2
 
 
-def fetch_history(sql_filename: str, key_col: str) -> pl.DataFrame:
-    df = run_query(sql_filename)
-
+def validate_history(df: pl.DataFrame, key_col: str) -> pl.DataFrame:
+    """Check required history columns and normalize SNAPSHOT_DATE to Date."""
     required = {key_col, "SNAPSHOT_DATE"}
     missing = required - set(df.columns)
     if missing:
         raise KeyError(f"Table missing columns: {missing}")
 
-    df = df.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
+    return df.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
 
-    return df
+
+def fetch_history(
+    sql_filename: str, key_col: str,
+    database: str = "default", config: dict | None = None,
+) -> pl.DataFrame:
+    df = run_query(sql_filename, database=database, config=config)
+    return validate_history(df, key_col)
+
+
+def history_fetch_plan(cache_path: Path, sql_full: str, sql_recent: str) -> tuple[str, str]:
+    """Choose which history SQL to run based on cache presence.
+
+    Returns (sql_filename, kind) where kind is 'full' or 'recent'. Lets
+    pipelines prefetch the history query in parallel with other queries
+    and hand the result to update_history() afterwards.
+    """
+    if cache_path.exists():
+        return sql_recent, "recent"
+    return sql_full, "full"
 
 
 def update_history_cache_with_recent(
@@ -363,7 +418,6 @@ def update_history_cache_with_recent(
     # Concat and free the inputs immediately to avoid holding 2x in memory
     combined = pl.concat([cached_keep, recent])
     del cached_keep, recent
-    gc.collect()
 
     combined = combined.drop_nulls(subset=KEY_COLS).unique(subset=KEY_COLS, keep="last")
 
@@ -382,7 +436,8 @@ def update_history_cache_with_recent(
 
 def build_and_cache_history(sql_full: str, key_col: str, cache_path: Path, config: dict = None) -> pl.DataFrame:
     logger.info("Building full history cache")
-    df = fetch_history(sql_full, key_col)
+    db = (config or {}).get("database", {}).get("name", "default")
+    df = fetch_history(sql_full, key_col, database=db, config=config)
     write_history_cache(df, cache_path, config=config)
     return df
 
@@ -390,23 +445,37 @@ def build_and_cache_history(sql_full: str, key_col: str, cache_path: Path, confi
 def update_history(
     sql_full: str, sql_recent: str, key_col: str, cache_path: Path,
     config: dict = None, force: bool = False,
+    prefetched: pl.DataFrame | None = None, prefetched_kind: str | None = None,
 ) -> pl.DataFrame:
+    """Merge fresh history into the cache.
+
+    ``prefetched``/``prefetched_kind`` let a pipeline fetch the history
+    query concurrently with its other queries (see history_fetch_plan)
+    and pass the result in, avoiding a second sequential fetch here.
+    """
     cached_lf = read_history_cache(cache_path)
 
     if cached_lf is None:
+        if prefetched is not None and prefetched_kind == "full":
+            df = validate_history(prefetched, key_col)
+            write_history_cache(df, cache_path, config=config)
+            return df
+        # No cache and no full prefetch — fall back to a full fetch
         return build_and_cache_history(sql_full, key_col, cache_path, config=config)
 
-    recent = fetch_history(sql_recent, key_col)
+    if prefetched is not None:
+        recent = validate_history(prefetched, key_col)
+    else:
+        db = (config or {}).get("database", {}).get("name", "default")
+        recent = fetch_history(sql_recent, key_col, database=db, config=config)
 
     if force:
         # Skip shrinkage check when --force is used
         cfg_override = dict(config) if config else {}
-        cfg_override.setdefault("cache", {})
-        cfg_override["cache"] = {**cfg_override["cache"], "min_retention_pct": 0.0}
-        updated = update_history_cache_with_recent(cached_lf, recent, key_col, config=cfg_override)
-    else:
-        updated = update_history_cache_with_recent(cached_lf, recent, key_col, config=config)
+        cfg_override["cache"] = {**cfg_override.get("cache", {}), "min_retention_pct": 0.0}
+        config = cfg_override
 
+    updated = update_history_cache_with_recent(cached_lf, recent, key_col, config=config)
     write_history_cache(updated, cache_path, config=config)
     return updated
 

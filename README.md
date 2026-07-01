@@ -125,6 +125,7 @@ python main.py [pipeline] [action] [options]
 | Flag | Description |
 |------|-------------|
 | `--force` | Bypass cache shrinkage safety check (use if cache needs to shrink) |
+| `--verbose` | Show full per-column stats tables after each step (slower at large row counts) |
 
 ### Examples
 
@@ -298,7 +299,8 @@ Next run (DB has Mar 9 now):
 - **Interactive SQL** — Query final DataFrames with standard SQL via `--query` for debugging and data validation; also available standalone via `python -m sql_shell`
 - **Sprint parsing** — Extracts sprint versions from names, handles IP sprints, and computes min/max per snapshot and program increment using numeric sort keys
 - **Automatic backups** — Previous hyper files and cache files are timestamped and saved before overwrite, with configurable rotation
-- **Summary statistics** — Each step logs a formatted table with column dtypes, null counts/percentages, unique values, min/max, and memory usage
+- **Summary statistics** — With `--verbose`, each step logs a formatted table with column dtypes, null counts/percentages, unique values, min/max, and memory usage; by default a fast one-line summary is shown
+- **Parallel fetching** — Independent SQL queries run concurrently (configurable via `database.parallel_fetch` / `database.max_parallel_queries`)
 - **Rich console output** — Color-coded progress spinners, step indicators, and formatted tables via [Rich](https://github.com/Textualize/rich)
 - **Multi-environment Tableau publishing** — Publish hyper files to TST, PRD, or all Tableau servers with `--publish`, `--publish-tst`, `--publish-prd`
 - **Incremental updates** — Only recent history is fetched and merged on subsequent runs, with a safety check preventing cache shrinkage beyond a configurable threshold (default: 2%)

@@ -17,6 +17,9 @@ from conversion.shared import (
     _supertype,
     fill_missing_snapshots,
     get_last_n_snapshots,
+    parallel_fetch,
+    update_history_cache_with_recent,
+    validate_history,
 )
 
 
@@ -100,11 +103,69 @@ def test_fill_missing_snapshots_fills_gap_and_marks_synthetic() -> None:
           set(synth["EPIC_KEY"].to_list()).issubset({"E1", "E2"}))
 
 
+def test_cache_merge_replaces_overlapping_keys() -> None:
+    """update_history_cache_with_recent: recent rows replace same-key cached rows."""
+    import tempfile
+    from pathlib import Path
+
+    cached = pl.DataFrame({
+        "EPIC_KEY": ["E1", "E2", "E3"],
+        "SNAPSHOT_DATE": [datetime(2026, 4, 6).date()] * 3,
+        "STATUS": ["Old", "Old", "Old"],
+    })
+    recent = pl.DataFrame({
+        "EPIC_KEY": ["E2", "E4"],
+        "SNAPSHOT_DATE": [datetime(2026, 4, 6).date()] * 2,
+        "STATUS": ["New", "New"],
+    })
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cache_path = Path(tmp) / "cache.parquet"
+        cached.write_parquet(cache_path)
+        merged = update_history_cache_with_recent(
+            pl.scan_parquet(cache_path), recent, "EPIC_KEY",
+            config={"cache": {"min_retention_pct": 0.0}},
+        )
+
+    check("merge: 4 rows total (E1, E2-new, E3, E4)", merged.height == 4,
+          detail=f"got {merged.height}")
+    e2_status = merged.filter(pl.col("EPIC_KEY") == "E2")["STATUS"].item()
+    check("merge: overlapping key E2 replaced by recent", e2_status == "New",
+          detail=f"got {e2_status}")
+    check("merge: new key E4 added", merged.filter(pl.col("EPIC_KEY") == "E4").height == 1)
+    check("merge: untouched key E1 kept",
+          merged.filter(pl.col("EPIC_KEY") == "E1")["STATUS"].item() == "Old")
+
+
+def test_validate_history_and_parallel_fetch() -> None:
+    df = pl.DataFrame({
+        "EPIC_KEY": ["E1"],
+        "SNAPSHOT_DATE": [datetime(2026, 4, 6)],  # Datetime in, Date out
+    })
+    out = validate_history(df, "EPIC_KEY")
+    check("validate_history: SNAPSHOT_DATE cast to Date", out.schema["SNAPSHOT_DATE"] == pl.Date)
+
+    try:
+        validate_history(pl.DataFrame({"EPIC_KEY": ["E1"]}), "EPIC_KEY")
+        check("validate_history: missing SNAPSHOT_DATE raises", False)
+    except KeyError:
+        check("validate_history: missing SNAPSHOT_DATE raises", True)
+
+    # parallel_fetch returns results keyed correctly, parallel and sequential
+    jobs = {"a": lambda: 1, "b": lambda: 2, "c": lambda: 3}
+    par = parallel_fetch(jobs, config={"database": {"parallel_fetch": True}})
+    seq = parallel_fetch(jobs, config={"database": {"parallel_fetch": False}})
+    check("parallel_fetch: parallel results match", par == {"a": 1, "b": 2, "c": 3})
+    check("parallel_fetch: sequential fallback matches", seq == par)
+
+
 def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
     test_supertype_rules()
     test_align_schemas_handles_missing_and_mixed_dtypes()
     test_fill_missing_snapshots_fills_gap_and_marks_synthetic()
+    test_cache_merge_replaces_overlapping_keys()
+    test_validate_history_and_parallel_fetch()
 
     print()
     if _FAILURES:

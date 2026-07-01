@@ -6,7 +6,7 @@ from schemas.datatypes import EXPECTED_DTYPES_EPICS
 from conversion.shared import (
     OUTPUT_DIR, get_cache_path, run_query, clean_dtypes, update_history,
     union_data, export_hyper, log_dataframe_summary, publish_hyper,
-    fill_missing_snapshots,
+    fill_missing_snapshots, history_fetch_plan, parallel_fetch,
 )
 from conversion.console import (
     print_header, step_spinner, print_pipeline_complete,
@@ -145,29 +145,35 @@ def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str],
     return lookup
 
 
-def fetch_sprint_range(config: dict) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
-    """Fetch sprint range lookups for both history and summary.
+def build_sprint_lookups(
+    df_hist: pl.DataFrame, df_sum: pl.DataFrame,
+) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """Build sprint range lookups from already-fetched sprint range data.
 
     Returns (history_lookup, summary_lookup, current_sprint_hist, current_sprint_sum).
     """
     today = datetime.now().date()
 
-    cfg = config["epics"]
-    db = config["database"]["name"]
-
     # History: keyed by SNAPSHOT_DATE + PROGRAM_INCREMENT
-    df_hist = run_query(cfg["sql_agile_sprint_range"], database=db, config=config)
     if "SNAPSHOT_DATE" in df_hist.columns:
         df_hist = df_hist.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
     history_lookup = _build_sprint_lookup(df_hist, SPRINT_PARTITION)
     current_sprint_hist = _build_current_sprint_lookup(df_hist, SPRINT_PARTITION, today)
 
     # Summary: keyed by PROGRAM_INCREMENT only (no snapshot date)
-    df_sum = run_query(cfg["sql_agile_sprint_range_summary"], database=db, config=config)
     summary_lookup = _build_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"])
     current_sprint_sum = _build_current_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"], today)
 
     return history_lookup, summary_lookup, current_sprint_hist, current_sprint_sum
+
+
+def fetch_sprint_range(config: dict) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """Fetch sprint range data and build the lookups (sequential convenience wrapper)."""
+    cfg = config["epics"]
+    db = config["database"]["name"]
+    df_hist = run_query(cfg["sql_agile_sprint_range"], database=db, config=config)
+    df_sum = run_query(cfg["sql_agile_sprint_range_summary"], database=db, config=config)
+    return build_sprint_lookups(df_hist, df_sum)
 
 
 def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
@@ -262,10 +268,12 @@ def join_agile(df: pl.DataFrame, df_agile: pl.DataFrame, has_snapshot: bool = Tr
 
 
 def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
-    # Diagnostic: null counts for the columns the filter cares about
-    null_snap = df.select(pl.col("Snapshot Date").is_null().sum()).item()
-    null_feat = df.select(pl.col("Feature Key").is_null().sum()).item()
-    null_subcap = df.select(pl.col("Subcapability Key").is_null().sum()).item()
+    # Diagnostic: null counts for the columns the filter cares about (one pass)
+    null_snap, null_feat, null_subcap = df.select([
+        pl.col("Snapshot Date").is_null().sum(),
+        pl.col("Feature Key").is_null().sum(),
+        pl.col("Subcapability Key").is_null().sum(),
+    ]).row(0)
     logger.info(
         f"ACRP diag: total={df.height} null Snapshot Date={null_snap} "
         f"null Feature Key={null_feat} null Subcapability Key={null_subcap}"
@@ -321,7 +329,7 @@ def run_update_cache(config: dict, force: bool = False):
 
 
 def _calc_steps(publish: bool) -> int:
-    return 10 if publish else 9
+    return 9 if publish else 8
 
 
 def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
@@ -336,9 +344,19 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     print_header("Epics Pipeline (Polars)")
     logger.info("Starting epics pipeline")
 
-    with step_spinner(1, total, "Fetching epic summary"):
-        df_summary = fetch_summary_full(config)
-        df_summary = clean_dtypes(df_summary, EXPECTED_DTYPES_EPICS)
+    with step_spinner(1, total, "Fetching epic & agile data (parallel)"):
+        hist_sql, hist_kind = history_fetch_plan(
+            cache_path, cfg["sql_history_full"], cfg["sql_history_recent"])
+        db = config["database"]["name"]
+        fetched = parallel_fetch({
+            "summary": lambda: fetch_summary_full(config),
+            "history": lambda: run_query(hist_sql, database=db, config=config),
+            "agile_history": lambda: fetch_agile(config, history=True),
+            "agile_summary": lambda: fetch_agile(config, history=False),
+            "sprint_range": lambda: run_query(cfg["sql_agile_sprint_range"], database=db, config=config),
+            "sprint_range_summary": lambda: run_query(cfg["sql_agile_sprint_range_summary"], database=db, config=config),
+        }, config=config)
+        df_summary = clean_dtypes(fetched["summary"], EXPECTED_DTYPES_EPICS)
     log_dataframe_summary(df_summary, "Epics Summary")
 
     with step_spinner(2, total, "Updating epic history cache"):
@@ -346,6 +364,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
             cfg["sql_history_full"], cfg["sql_history_recent"],
             cfg["key_column"], cache_path,
             config=config, force=force,
+            prefetched=fetched["history"], prefetched_kind=hist_kind,
         )
         df_history = clean_dtypes(df_history, EXPECTED_DTYPES_EPICS)
     log_dataframe_summary(df_history, "Epics History")
@@ -353,14 +372,14 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     with step_spinner(3, total, "Filling missing snapshots"):
         df_history = fill_missing_snapshots(df_summary, df_history, cfg["key_column"], config=config)
 
-    with step_spinner(4, total, "Fetching agile data"):
-        df_agile_history = fetch_agile(config, history=True)
-        df_agile_summary = fetch_agile(config, history=False)
-        sprint_history_lookup, sprint_summary_lookup, current_sprint_hist, current_sprint_sum = fetch_sprint_range(config)
+    df_agile_history = fetched["agile_history"]
+    df_agile_summary = fetched["agile_summary"]
     log_dataframe_summary(df_agile_history, "Agile History")
     log_dataframe_summary(df_agile_summary, "Agile Summary")
 
-    with step_spinner(5, total, "Joining agile data"):
+    with step_spinner(4, total, "Joining agile data"):
+        sprint_history_lookup, sprint_summary_lookup, current_sprint_hist, current_sprint_sum = \
+            build_sprint_lookups(fetched["sprint_range"], fetched["sprint_range_summary"])
         # Ensure SNAPSHOT_DATE is Date on both sides before joining
         df_history = df_history.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
         # Join agile history onto epic history (by FEATURE_KEY + SNAPSHOT_DATE)
@@ -368,14 +387,14 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
         # Join agile summary onto epic summary (by FEATURE_KEY only, no snapshot)
         df_summary = join_agile(df_summary, df_agile_summary, has_snapshot=False)
 
-    with step_spinner(6, total, "Unioning & transforming"):
+    with step_spinner(5, total, "Unioning & transforming"):
         df = union_data(df_summary, df_history)
         df = data_functions(df, sprint_history_lookup, sprint_summary_lookup,
                            current_sprint_hist, current_sprint_sum)
 
     # Build ACRP before filling Snapshot Date nulls — its filter relies on the
     # null marker to identify summary rows.
-    with step_spinner(7, total, "Building ACRP release range"):
+    with step_spinner(6, total, "Building ACRP release range"):
         df_acrp = build_acrp(df)
     log_dataframe_summary(df_acrp, "Epics ACRP")
 
@@ -384,14 +403,14 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     )
     log_dataframe_summary(df, "Epics Final")
 
-    with step_spinner(8, total, "Exporting EPICS.hyper"):
+    with step_spinner(7, total, "Exporting EPICS.hyper"):
         export_hyper(df, hyper_path, "Epics", config)
 
-    with step_spinner(9, total, "Exporting EPICS_ACRP.hyper"):
+    with step_spinner(8, total, "Exporting EPICS_ACRP.hyper"):
         export_hyper(df_acrp, acrp_hyper_path, "Epics_ACRP", config)
 
     if publish:
-        with step_spinner(10, total, "Publishing to Tableau"):
+        with step_spinner(9, total, "Publishing to Tableau"):
             publish_hyper(hyper_path, "Epics", config, targets=publish_targets,
                          datasource_name=cfg["table_id"])
             publish_hyper(acrp_hyper_path, "Epics_ACRP", config, targets=publish_targets,

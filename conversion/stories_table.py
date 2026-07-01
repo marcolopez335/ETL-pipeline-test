@@ -6,7 +6,7 @@ from schemas.datatypes import EXPECTED_DTYPES_STORIES
 from conversion.shared import (
     OUTPUT_DIR, get_cache_path, run_query, clean_dtypes, update_history,
     union_data, export_hyper, log_dataframe_summary, publish_hyper,
-    fill_missing_snapshots,
+    fill_missing_snapshots, history_fetch_plan, parallel_fetch,
 )
 from conversion.console import (
     print_header, step_spinner, print_info, print_pipeline_complete,
@@ -14,8 +14,8 @@ from conversion.console import (
 
 logger = get_logger(__name__)
 
-TOTAL_STEPS_BASE = 6
-TOTAL_STEPS_PUBLISH = 7
+TOTAL_STEPS_BASE = 5
+TOTAL_STEPS_PUBLISH = 6
 
 # Extracts sprint version like "26.1.IP" from sprint names like "AMMM 26.1.IP"
 SPRINT_NAME_PATTERN = r"(\d{2}\.\d.\w+)"
@@ -58,8 +58,12 @@ def data_functions(df: pl.DataFrame) -> pl.DataFrame:
           .otherwise(pl.col("SNAPSHOT_DATE"))
           .alias("SNAPSHOT_DATE_ALT"),
         pl.col("SNAPSHOT_DATE").fill_null(pl.lit(now.date())),
-        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_NAME_PATTERN).str.slice(0, PI_PREFIX_LENGTH).alias("PI_FROM_SPRINT"),
     ])
+    # PI_FROM_SPRINT is a prefix of SPRINT_NAME_ALT — derive it instead of
+    # running the regex extraction over SPRINT_NAME a second time
+    df = df.with_columns(
+        pl.col("SPRINT_NAME_ALT").str.slice(0, PI_PREFIX_LENGTH).alias("PI_FROM_SPRINT")
+    )
 
     # Rename columns: SNAKE_CASE -> Title Case
     rename_map = {
@@ -96,9 +100,16 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     print_header("Stories Pipeline (Polars)")
     logger.info("Starting stories pipeline")
 
-    with step_spinner(1, total, "Fetching summary"):
-        df_summary = fetch_summary_full(config)
-        df_summary = clean_dtypes(df_summary, EXPECTED_DTYPES_STORIES)
+    with step_spinner(1, total, "Fetching summary, history & epics (parallel)"):
+        hist_sql, hist_kind = history_fetch_plan(
+            cache_path, cfg["sql_history_full"], cfg["sql_history_recent"])
+        db = config["database"]["name"]
+        fetched = parallel_fetch({
+            "summary": lambda: fetch_summary_full(config),
+            "history": lambda: run_query(hist_sql, database=db, config=config),
+            "epics": lambda: fetch_epics_full(config),
+        }, config=config)
+        df_summary = clean_dtypes(fetched["summary"], EXPECTED_DTYPES_STORIES)
     log_dataframe_summary(df_summary, "Stories Summary")
 
     with step_spinner(2, total, "Updating history cache"):
@@ -106,6 +117,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
             cfg["sql_history_full"], cfg["sql_history_recent"],
             cfg["key_column"], cache_path,
             config=config, force=force,
+            prefetched=fetched["history"], prefetched_kind=hist_kind,
         )
         df_history = clean_dtypes(df_history, EXPECTED_DTYPES_STORIES)
     log_dataframe_summary(df_history, "Stories History")
@@ -113,22 +125,19 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     with step_spinner(3, total, "Filling missing snapshots"):
         df_history = fill_missing_snapshots(df_summary, df_history, cfg["key_column"], config=config)
 
-    with step_spinner(4, total, "Fetching epics"):
+    with step_spinner(4, total, "Joining & transforming"):
         stories = union_data(df_summary, df_history)
-        epics = fetch_epics_full(config)
-        epics = clean_dtypes(epics, EXPECTED_DTYPES_STORIES)
-
-    with step_spinner(5, total, "Joining & transforming"):
+        epics = clean_dtypes(fetched["epics"], EXPECTED_DTYPES_STORIES)
         df = join_stories_data(stories, epics)
         df = data_functions(df)
 
     log_dataframe_summary(df, "Stories Final")
 
-    with step_spinner(6, total, "Exporting hyper"):
+    with step_spinner(5, total, "Exporting hyper"):
         export_hyper(df, hyper_path, "Stories", config)
 
     if publish:
-        with step_spinner(7, total, "Publishing to Tableau"):
+        with step_spinner(6, total, "Publishing to Tableau"):
             publish_hyper(hyper_path, "Stories", config, targets=publish_targets,
                          datasource_name=cfg["table_id"])
 

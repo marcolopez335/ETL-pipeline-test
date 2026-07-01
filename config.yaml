@@ -1,6 +1,8 @@
 database:
   name: "default"
   use_stored_credentials: true
+  parallel_fetch: true        # run independent queries concurrently (set false if the DB limits sessions)
+  max_parallel_queries: 4     # cap on concurrent ODBC connections during fetch
 
 paths:
   sql_dir: "sql"

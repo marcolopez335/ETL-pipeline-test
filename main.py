@@ -85,6 +85,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Open interactive SQL shell after pipeline runs")
     parser.add_argument("--query-only", action="store_true",
                         help="Open SQL shell loading from cache (no pipeline run)")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Show full per-column stats tables after each step (slower)")
     return parser
 
 
@@ -94,6 +96,7 @@ def main() -> int:
 
     config = load_config()
     db = config["database"]["name"]
+    shared.set_verbose_summaries(args.verbose)
 
     console.print()
     console.rule("[bold cyan]ODBC Data Pipeline[/]", style="cyan")
