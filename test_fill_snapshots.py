@@ -160,10 +160,11 @@ def test_validate_history_and_parallel_fetch() -> None:
 
 
 def test_build_burnup() -> None:
+    from datetime import timezone
     from conversion.burnup_table import build_burnup
 
     df = pl.DataFrame({
-        "LAST_UPDATED": ["2026-07-01 12:30:00"] * 3,      # UTC; July = EDT (-4)
+        "LAST_UPDATED": ["2026-07-01 12:30:00"] * 3,      # DB value -> SNAPSHOT_DATE
         "TEAM_NAME": ["Alpha"] * 3,
         "ISSUE_KEY": ["F-1", "F-2", "F-3"],
         "SUMMARY": ["Program A"] * 3,
@@ -175,7 +176,9 @@ def test_build_burnup() -> None:
         "PARENT_KEY": ["SC-1"] * 3,
     })
 
-    out = build_burnup(df)
+    # Fixed run time: 2026-07-01 15:00 UTC -> 10:00 CDT (Central, DST -5)
+    run_ts = datetime(2026, 7, 1, 15, 0, tzinfo=timezone.utc)
+    out = build_burnup(df, run_timestamp=run_ts)
 
     # 3 features x 3 date cols = 9 melted rows, minus 4 with null dates
     check("burnup: null-date rows filtered (9 -> 5)", out.height == 5,
@@ -201,19 +204,19 @@ def test_build_burnup() -> None:
     check("burnup: PLANNED flags F-2 and F-3 regardless of status",
           sorted(planned["ISSUE_KEY"].to_list()) == ["F-2", "F-3"])
 
-    # LAST_UPDATED: 12:30 UTC on 2026-07-01 -> 08:30 EDT (DST-aware -4)
+    # LAST_UPDATED = run timestamp 15:00 UTC -> 10:00 US Central (CDT -5)
     lu = out["LAST_UPDATED"][0]
-    check("burnup: LAST_UPDATED converted to US Eastern (EDT -4)",
-          (lu.hour, lu.minute) == (8, 30), detail=f"got {lu}")
+    check("burnup: LAST_UPDATED is run time in US Central (CDT -5)",
+          (lu.hour, lu.minute) == (10, 0), detail=f"got {lu}")
 
-    # IMET_SUMMARY_LAST_UPDATED keeps the original UTC value
+    # IMET_SUMMARY_LAST_UPDATED keeps the raw DB timestamp
     imet = out["IMET_SUMMARY_LAST_UPDATED"][0]
-    check("burnup: IMET_SUMMARY_LAST_UPDATED keeps original timestamp",
+    check("burnup: IMET_SUMMARY_LAST_UPDATED keeps raw DB timestamp",
           (imet.hour, imet.minute) == (12, 30))
 
-    # SNAPSHOT_DATE = original LAST_UPDATED at midnight
+    # SNAPSHOT_DATE = DB LAST_UPDATED at midnight (the rename target)
     snap = out["SNAPSHOT_DATE"][0]
-    check("burnup: SNAPSHOT_DATE is midnight of original LAST_UPDATED",
+    check("burnup: SNAPSHOT_DATE is midnight of DB LAST_UPDATED",
           (snap.year, snap.month, snap.day, snap.hour) == (2026, 7, 1, 0))
 
     # DATE_VALUE normalized to midnight (resolved 09:15 -> 00:00)

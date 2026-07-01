@@ -181,10 +181,10 @@ Flags can be combined freely: `python main.py --stories --publish-tst --query`
 
 A long-format date-event dataset built from `FeatureBurnup.sql` (Feature rows of the epic summary source, with `SUMMARY` pulled from the Customer Epic level):
 
-1. Derives `SOURCE_TYPE` (`"summary"`), `IMET_SUMMARY_LAST_UPDATED`, `SNAPSHOT_DATE` (midnight-normalized `LAST_UPDATED`), and `TARGET_END_REF`
+1. Renames the database `LAST_UPDATED` to `SNAPSHOT_DATE` (midnight-normalized); keeps the raw value as `IMET_SUMMARY_LAST_UPDATED`; derives `SOURCE_TYPE` (`"summary"`) and `TARGET_END_REF`
 2. Unpivots `TARGET_END` / `RESOLVED` / `PLANNED_END` into `DATE_TYPE` + `DATE_VALUE` (midnight-normalized) rows
 3. Flags per row: `DONE_FEATURES` (resolved + status done/accepted), `PROJECTED_FEATURES` (target end + status **not** done/accepted/cancelled), `PLANNED_FEATURES` (planned end, any status)
-4. Converts `LAST_UPDATED` from UTC to US Eastern (DST-aware)
+4. Adds a fresh `LAST_UPDATED` = pipeline run time converted to US Central (DST-aware) as a data-freshness stamp
 5. Drops rows with a null `DATE_VALUE`
 
 ### ACRP (Active Capability Release Plan)

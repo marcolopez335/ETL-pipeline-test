@@ -2,14 +2,18 @@
 
 Mirrors the Alteryx burn-up workflow:
 
-1. Select the summary fields and derive SOURCE_TYPE / SNAPSHOT_DATE /
-   IMET_SUMMARY_LAST_UPDATED / TARGET_END_REF.
+1. Rename the database LAST_UPDATED to SNAPSHOT_DATE (midnight-normalized);
+   keep the raw value as IMET_SUMMARY_LAST_UPDATED. Derive SOURCE_TYPE and
+   TARGET_END_REF.
 2. Unpivot the three date columns (TARGET_END / RESOLVED / PLANNED_END)
    into DATE_TYPE + DATE_VALUE rows.
 3. Flag DONE / PROJECTED / PLANNED features per melted row.
-4. Convert LAST_UPDATED from UTC to US Eastern (DST-aware).
+4. Add a fresh LAST_UPDATED = pipeline run time converted to US Central
+   (DST-aware) — a data-freshness stamp, unrelated to the DB column.
 5. Drop rows with no DATE_VALUE.
 """
+
+from datetime import datetime, timezone
 
 import polars as pl
 
@@ -27,7 +31,9 @@ DATE_COLS = ["TARGET_END", "RESOLVED", "PLANNED_END"]
 DONE_STATUSES = ["done", "accepted"]
 TERMINAL_STATUSES = ["done", "accepted", "cancelled"]
 
-LOCAL_TIMEZONE = "America/New_York"
+# Local zone for the LAST_UPDATED freshness stamp. DST-aware: -5 (CDT) in
+# summer, -6 (CST) in winter. Change to "America/New_York" for US Eastern.
+LOCAL_TIMEZONE = "America/Chicago"
 
 
 def _ensure_datetime(df: pl.DataFrame, cols: list[str]) -> pl.DataFrame:
@@ -50,8 +56,13 @@ def _ensure_datetime(df: pl.DataFrame, cols: list[str]) -> pl.DataFrame:
     return df
 
 
-def build_burnup(df: pl.DataFrame) -> pl.DataFrame:
-    """Build the feature burn-up dataset from the FeatureBurnup.sql result."""
+def build_burnup(df: pl.DataFrame, run_timestamp: datetime | None = None) -> pl.DataFrame:
+    """Build the feature burn-up dataset from the FeatureBurnup.sql result.
+
+    Args:
+        run_timestamp: Aware UTC datetime used for the LAST_UPDATED
+            freshness stamp. Defaults to now; injectable for tests.
+    """
     missing = [c for c in SOURCE_COLUMNS if c not in df.columns]
     if missing:
         raise KeyError(f"Burn-up source missing columns: {missing}")
@@ -59,13 +70,15 @@ def build_burnup(df: pl.DataFrame) -> pl.DataFrame:
     df = df.select(SOURCE_COLUMNS)
     df = _ensure_datetime(df, ["LAST_UPDATED"] + DATE_COLS)
 
-    # Derived columns — computed from the ORIGINAL (unshifted) LAST_UPDATED
+    # The database LAST_UPDATED becomes SNAPSHOT_DATE (midnight) and is kept
+    # raw as IMET_SUMMARY_LAST_UPDATED; the original column is then dropped
+    # so the name is free for the run-time freshness stamp below.
     df = df.with_columns([
         pl.lit("summary").alias("SOURCE_TYPE"),
         pl.col("LAST_UPDATED").alias("IMET_SUMMARY_LAST_UPDATED"),
         pl.col("LAST_UPDATED").dt.truncate("1d").alias("SNAPSHOT_DATE"),
         pl.col("TARGET_END").alias("TARGET_END_REF"),
-    ])
+    ]).drop("LAST_UPDATED")
 
     # Unpivot: one row per (feature, date column). DATE_TYPE carries the
     # source column name; DATE_VALUE the date, normalized to midnight.
@@ -96,14 +109,18 @@ def build_burnup(df: pl.DataFrame) -> pl.DataFrame:
         ).then(pl.col("ISSUE_KEY")).alias("PLANNED_FEATURES"),
     ])
 
-    # LAST_UPDATED: source timestamps are UTC — convert to US Eastern
-    # (DST-aware: -4 in summer, -5 in winter), then drop the tz marker
-    # so the hyper column stays a naive local datetime.
+    # LAST_UPDATED freshness stamp: when this pipeline run produced the data,
+    # converted UTC -> US Central (DST-aware) and stored as a naive local
+    # datetime. Uses Polars' bundled tz database (no system tzdata needed).
+    if run_timestamp is None:
+        run_timestamp = datetime.now(timezone.utc)
+    now_utc_naive = run_timestamp.astimezone(timezone.utc).replace(tzinfo=None)
     df = df.with_columns(
-        pl.col("LAST_UPDATED")
+        pl.lit(now_utc_naive, dtype=pl.Datetime)
         .dt.replace_time_zone("UTC")
         .dt.convert_time_zone(LOCAL_TIMEZONE)
         .dt.replace_time_zone(None)
+        .alias("LAST_UPDATED")
     )
 
     before = df.height
