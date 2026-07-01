@@ -147,11 +147,12 @@ def main() -> int:
         sql_tables["stories"] = df_stories
 
     if run_all or args.epics:
-        df_epics, df_acrp = epics.run(
+        df_epics, df_acrp, df_burnup = epics.run(
             config, publish=do_publish, publish_targets=publish_targets, force=args.force,
         )
         sql_tables["epics"] = df_epics
         sql_tables["acrp"] = df_acrp
+        sql_tables["burnup"] = df_burnup
 
     console.rule("[bold green]Done[/]", style="green")
     console.print()

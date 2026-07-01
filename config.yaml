@@ -37,8 +37,11 @@ stories:
 epics:
   table_id: "AMMM.Epics.v1.py"
   acrp_table_id: "AMMM.Epics_ACRP.v1.py"
+  burnup_table_id: "AMMM.Feature_Burnup.v1.py"
   hyper_filename: "EPICS.hyper"
   acrp_hyper_filename: "EPICS_ACRP.hyper"
+  burnup_hyper_filename: "FEATURE_BURNUP.hyper"
+  sql_burnup: "FeatureBurnup.sql"
   cache_filename: "epics_history_cache.parquet"
   key_column: "EPIC_KEY"
   sql_history_full: "EpicHistory.sql"

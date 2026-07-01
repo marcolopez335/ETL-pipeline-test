@@ -159,6 +159,69 @@ def test_validate_history_and_parallel_fetch() -> None:
     check("parallel_fetch: sequential fallback matches", seq == par)
 
 
+def test_build_burnup() -> None:
+    from conversion.burnup_table import build_burnup
+
+    df = pl.DataFrame({
+        "LAST_UPDATED": ["2026-07-01 12:30:00"] * 3,      # UTC; July = EDT (-4)
+        "TEAM_NAME": ["Alpha"] * 3,
+        "ISSUE_KEY": ["F-1", "F-2", "F-3"],
+        "SUMMARY": ["Program A"] * 3,
+        "ISSUE_TYPE": ["Feature"] * 3,
+        "STATUS": ["Done", "In Progress", "Cancelled"],
+        "TARGET_END": ["2026-08-01 00:00:00", "2026-09-15 10:00:00", None],
+        "RESOLVED": ["2026-06-20 09:15:00", None, None],
+        "PLANNED_END": [None, "2026-09-01 00:00:00", "2026-07-15 00:00:00"],
+        "PARENT_KEY": ["SC-1"] * 3,
+    })
+
+    out = build_burnup(df)
+
+    # 3 features x 3 date cols = 9 melted rows, minus 4 with null dates
+    check("burnup: null-date rows filtered (9 -> 5)", out.height == 5,
+          detail=f"got {out.height}")
+    check("burnup: SOURCE_TYPE is 'summary'",
+          out["SOURCE_TYPE"].unique().to_list() == ["summary"])
+    check("burnup: TARGET_END_REF retained", "TARGET_END_REF" in out.columns)
+
+    # DONE: only F-1 (RESOLVED row, status Done)
+    done = out.filter(pl.col("DONE_FEATURES").is_not_null())
+    check("burnup: DONE flags exactly F-1's resolved row",
+          done.height == 1 and done["ISSUE_KEY"].item() == "F-1"
+          and done["DATE_TYPE"].item() == "RESOLVED")
+
+    # PROJECTED: only F-2 (TARGET_END row, status not terminal);
+    # F-1 is Done and F-3's target is null
+    proj = out.filter(pl.col("PROJECTED_FEATURES").is_not_null())
+    check("burnup: PROJECTED flags exactly F-2's target row",
+          proj.height == 1 and proj["ISSUE_KEY"].item() == "F-2")
+
+    # PLANNED: F-2 and F-3 (no status filter)
+    planned = out.filter(pl.col("PLANNED_FEATURES").is_not_null())
+    check("burnup: PLANNED flags F-2 and F-3 regardless of status",
+          sorted(planned["ISSUE_KEY"].to_list()) == ["F-2", "F-3"])
+
+    # LAST_UPDATED: 12:30 UTC on 2026-07-01 -> 08:30 EDT (DST-aware -4)
+    lu = out["LAST_UPDATED"][0]
+    check("burnup: LAST_UPDATED converted to US Eastern (EDT -4)",
+          (lu.hour, lu.minute) == (8, 30), detail=f"got {lu}")
+
+    # IMET_SUMMARY_LAST_UPDATED keeps the original UTC value
+    imet = out["IMET_SUMMARY_LAST_UPDATED"][0]
+    check("burnup: IMET_SUMMARY_LAST_UPDATED keeps original timestamp",
+          (imet.hour, imet.minute) == (12, 30))
+
+    # SNAPSHOT_DATE = original LAST_UPDATED at midnight
+    snap = out["SNAPSHOT_DATE"][0]
+    check("burnup: SNAPSHOT_DATE is midnight of original LAST_UPDATED",
+          (snap.year, snap.month, snap.day, snap.hour) == (2026, 7, 1, 0))
+
+    # DATE_VALUE normalized to midnight (resolved 09:15 -> 00:00)
+    dv = out.filter(pl.col("DATE_TYPE") == "RESOLVED")["DATE_VALUE"].item()
+    check("burnup: DATE_VALUE truncated to midnight",
+          (dv.hour, dv.minute) == (0, 0), detail=f"got {dv}")
+
+
 def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
     test_supertype_rules()
@@ -166,6 +229,7 @@ def main() -> int:
     test_fill_missing_snapshots_fills_gap_and_marks_synthetic()
     test_cache_merge_replaces_overlapping_keys()
     test_validate_history_and_parallel_fetch()
+    test_build_burnup()
 
     print()
     if _FAILURES:

@@ -174,7 +174,18 @@ Flags can be combined freely: `python main.py --stories --publish-tst --query`
 4. Union summary with history, apply transformations (`LAST_UPDATED`, sprint parsing, `MIN_SPRINT`/`MAX_SPRINT`)
 5. Export to `EPICS.hyper`
 6. Build ACRP release range view and export to `EPICS_ACRP.hyper`
-7. Optionally publish both hyper files to Tableau Server
+7. Build feature burn-up view and export to `FEATURE_BURNUP.hyper`
+8. Optionally publish all hyper files to Tableau Server
+
+### Feature Burn-Up
+
+A long-format date-event dataset built from `FeatureBurnup.sql` (Feature rows of the epic summary source, with `SUMMARY` pulled from the Customer Epic level):
+
+1. Derives `SOURCE_TYPE` (`"summary"`), `IMET_SUMMARY_LAST_UPDATED`, `SNAPSHOT_DATE` (midnight-normalized `LAST_UPDATED`), and `TARGET_END_REF`
+2. Unpivots `TARGET_END` / `RESOLVED` / `PLANNED_END` into `DATE_TYPE` + `DATE_VALUE` (midnight-normalized) rows
+3. Flags per row: `DONE_FEATURES` (resolved + status done/accepted), `PROJECTED_FEATURES` (target end + status **not** done/accepted/cancelled), `PLANNED_FEATURES` (planned end, any status)
+4. Converts `LAST_UPDATED` from UTC to US Eastern (DST-aware)
+5. Drops rows with a null `DATE_VALUE`
 
 ### ACRP (Active Capability Release Plan)
 
@@ -222,7 +233,7 @@ sql> SELECT FEATURE_KEY, MIN_SPRINT, MAX_SPRINT FROM epics WHERE PROGRAM_INCREME
 | `!<n>` | Re-run query #n from history |
 | `exit` | Exit the SQL shell |
 
-**Available tables:** `stories`, `epics`, `acrp` (depending on which pipelines ran)
+**Available tables:** `stories`, `epics`, `acrp`, `burnup` (depending on which pipelines ran)
 
 > Results are capped at 100 rows by default. Use `LIMIT` to override.
 

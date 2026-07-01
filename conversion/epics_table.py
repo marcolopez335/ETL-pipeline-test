@@ -11,6 +11,7 @@ from conversion.shared import (
 from conversion.console import (
     print_header, step_spinner, print_pipeline_complete,
 )
+from conversion.burnup_table import build_burnup
 
 logger = get_logger(__name__)
 
@@ -329,15 +330,16 @@ def run_update_cache(config: dict, force: bool = False):
 
 
 def _calc_steps(publish: bool) -> int:
-    return 9 if publish else 8
+    return 11 if publish else 10
 
 
 def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
-        force: bool = False) -> tuple[pl.DataFrame, pl.DataFrame]:
+        force: bool = False) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     cfg = config["epics"]
     cache_path = get_cache_path(cfg["cache_filename"])
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
     acrp_hyper_path = OUTPUT_DIR / cfg["acrp_hyper_filename"]
+    burnup_hyper_path = OUTPUT_DIR / cfg["burnup_hyper_filename"]
     total = _calc_steps(publish)
     start = time.time()
 
@@ -355,6 +357,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
             "agile_summary": lambda: fetch_agile(config, history=False),
             "sprint_range": lambda: run_query(cfg["sql_agile_sprint_range"], database=db, config=config),
             "sprint_range_summary": lambda: run_query(cfg["sql_agile_sprint_range_summary"], database=db, config=config),
+            "burnup": lambda: run_query(cfg["sql_burnup"], database=db, config=config),
         }, config=config)
         df_summary = clean_dtypes(fetched["summary"], EXPECTED_DTYPES_EPICS)
     log_dataframe_summary(df_summary, "Epics Summary")
@@ -403,20 +406,29 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     )
     log_dataframe_summary(df, "Epics Final")
 
-    with step_spinner(7, total, "Exporting EPICS.hyper"):
+    with step_spinner(7, total, "Building feature burn-up"):
+        df_burnup = build_burnup(fetched["burnup"])
+    log_dataframe_summary(df_burnup, "Feature Burn-Up")
+
+    with step_spinner(8, total, "Exporting EPICS.hyper"):
         export_hyper(df, hyper_path, "Epics", config)
 
-    with step_spinner(8, total, "Exporting EPICS_ACRP.hyper"):
+    with step_spinner(9, total, "Exporting EPICS_ACRP.hyper"):
         export_hyper(df_acrp, acrp_hyper_path, "Epics_ACRP", config)
 
+    with step_spinner(10, total, "Exporting FEATURE_BURNUP.hyper"):
+        export_hyper(df_burnup, burnup_hyper_path, "Feature_Burnup", config)
+
     if publish:
-        with step_spinner(9, total, "Publishing to Tableau"):
+        with step_spinner(11, total, "Publishing to Tableau"):
             publish_hyper(hyper_path, "Epics", config, targets=publish_targets,
                          datasource_name=cfg["table_id"])
             publish_hyper(acrp_hyper_path, "Epics_ACRP", config, targets=publish_targets,
                          datasource_name=cfg["acrp_table_id"])
+            publish_hyper(burnup_hyper_path, "Feature_Burnup", config, targets=publish_targets,
+                         datasource_name=cfg["burnup_table_id"])
 
     elapsed = time.time() - start
     logger.info("Epics pipeline complete")
     print_pipeline_complete("Epics", elapsed)
-    return df, df_acrp
+    return df, df_acrp, df_burnup
