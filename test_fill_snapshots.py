@@ -52,10 +52,35 @@ def test_supertype_rules() -> None:
     check("identical dtypes return as-is", _supertype(pl.Int64, pl.Int64) == pl.Int64)
     check("Null + Utf8 -> Utf8", _supertype(pl.Null, pl.Utf8) == pl.Utf8)
     check("Int + Float -> Float64", _supertype(pl.Int32, pl.Float32) == pl.Float64)
-    check("Date + Datetime -> Datetime",
-          _supertype(pl.Date, pl.Datetime) == pl.Datetime)
+    check("Date + Datetime -> Datetime(us)",
+          _supertype(pl.Date(), pl.Datetime("us")) == pl.Datetime("us"))
+    check("Datetime us + ns -> concrete Datetime(us)",
+          _supertype(pl.Datetime("us"), pl.Datetime("ns")) == pl.Datetime("us"))
     check("incompatible falls back to Utf8",
           _supertype(pl.Int64, pl.Utf8) == pl.Utf8)
+
+
+def test_align_schemas_unifies_datetime_units() -> None:
+    """Regression: cache (us) + fresh-from-pandas (ns) must concat cleanly.
+
+    The bare pl.Datetime class compares equal to instances of any unit, so a
+    supertype of `pl.Datetime` (not Datetime("us")) silently skipped the cast
+    and pl.concat raised at the cache-merge step.
+    """
+    us = pl.DataFrame({"K": ["a"]}).with_columns(
+        pl.lit(datetime(2026, 4, 6, 12, 0)).cast(pl.Datetime("us")).alias("CREATED"))
+    ns = pl.DataFrame({"K": ["b"]}).with_columns(
+        pl.lit(datetime(2026, 4, 7, 13, 0)).cast(pl.Datetime("ns")).alias("CREATED"))
+
+    a, b = _align_schemas(us, ns)
+    check("align: us/ns unified to a single unit",
+          a.schema["CREATED"] == b.schema["CREATED"],
+          detail=f"{a.schema['CREATED']} vs {b.schema['CREATED']}")
+
+    merged = pl.concat([a, b])
+    check("align: concat of us + ns frames succeeds", merged.height == 2)
+    check("align: datetime values preserved (not stringified)",
+          isinstance(merged.schema["CREATED"], pl.Datetime))
 
 
 def test_align_schemas_handles_missing_and_mixed_dtypes() -> None:
@@ -255,6 +280,7 @@ def test_prompt_guard_and_spinner_pause() -> None:
 def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
     test_supertype_rules()
+    test_align_schemas_unifies_datetime_units()
     test_align_schemas_handles_missing_and_mixed_dtypes()
     test_fill_missing_snapshots_fills_gap_and_marks_synthetic()
     test_cache_merge_replaces_overlapping_keys()

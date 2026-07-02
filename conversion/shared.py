@@ -124,10 +124,18 @@ def run_query(
         df = pl.from_pandas(pdf)
         # Free the pandas copy immediately — it can be as large as the Polars one
         del pdf
-        # Cast any Null-typed columns (all-null from pandas) to Utf8 early
-        null_cols = [c for c in df.columns if df[c].dtype == pl.Null]
-        if null_cols:
-            df = df.with_columns([pl.col(c).cast(pl.Utf8) for c in null_cols])
+        # Normalize dtypes at the source:
+        # - Null-typed columns (all-null from pandas) -> Utf8
+        # - Datetime("ns") (pandas datetime64[ns]) -> Datetime("us"), matching
+        #   what Polars writes to parquet, so cache vs fresh never unit-clash
+        casts = []
+        for col, dtype in df.schema.items():
+            if dtype == pl.Null:
+                casts.append(pl.col(col).cast(pl.Utf8))
+            elif isinstance(dtype, pl.Datetime) and dtype.time_unit == "ns":
+                casts.append(pl.col(col).cast(pl.Datetime("us", dtype.time_zone)))
+        if casts:
+            df = df.with_columns(casts)
         logger.info(f"Query returned {df.height} rows")
     except Exception as exc:
         logger.error(f"Failed to execute {sql_filename}: {exc}")
@@ -302,7 +310,7 @@ def _supertype(a: pl.DataType, b: pl.DataType) -> pl.DataType:
       1. Identical dtypes → return as-is.
       2. Either is Null → use the other.
       3. Both numeric → Float64 (covers Int / Float mix).
-      4. Both temporal → Datetime (covers Date / Datetime mix).
+      4. Both temporal → Datetime("us") (covers Date / Datetime and us/ns mixes).
       5. Otherwise → Utf8 (last-resort string fallback).
     """
     if a == b:
@@ -313,8 +321,14 @@ def _supertype(a: pl.DataType, b: pl.DataType) -> pl.DataType:
         return a
     if a.is_numeric() and b.is_numeric():
         return pl.Float64
+    # Date/Datetime mixes — including Datetime unit mismatches (us vs ns) —
+    # unify on microseconds. Must be a CONCRETE dtype: the bare pl.Datetime
+    # class compares equal to instances of ANY unit, which makes the
+    # "already the target type?" check in _align_schemas skip needed casts.
+    if isinstance(a, (pl.Date, pl.Datetime)) and isinstance(b, (pl.Date, pl.Datetime)):
+        return pl.Datetime("us")
     if a.is_temporal() and b.is_temporal():
-        return pl.Datetime
+        return pl.Datetime("us")
     return pl.Utf8
 
 
