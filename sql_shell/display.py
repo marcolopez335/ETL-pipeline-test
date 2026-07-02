@@ -44,7 +44,7 @@ def render_result_table(result, display_limit: int = DEFAULT_ROW_LIMIT,
         table.add_row(*[truncate_value(v) for v in row])
     console.print(table)
     if truncated:
-        console.print(f"  [dim]Showing first {display_limit} of {total_rows:,} rows — use LIMIT to control[/]")
+        console.print(f"  [dim]Showing first {display_limit} of {total_rows:,} rows (use LIMIT to control)[/]")
     else:
         console.print(f"  [dim]{total_rows:,} row(s)[/]")
 

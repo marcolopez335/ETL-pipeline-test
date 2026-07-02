@@ -15,8 +15,10 @@ from sql_shell import interactive_sql  # noqa: F401
 
 console = Console()
 
-SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-SPINNER_INTERVAL = 0.08
+# ASCII-only frames: written raw to stderr, so they must survive any console
+# codepage (Windows cp1252/cp437 raises UnicodeEncodeError on fancier glyphs)
+SPINNER_FRAMES = ["|", "/", "-", "\\"]
+SPINNER_INTERVAL = 0.12
 
 # Animate only when stderr is a real terminal — in cron/CI/redirected runs
 # the \r control characters would just pollute the captured logs.
@@ -118,14 +120,14 @@ def print_header(title: str) -> None:
 
 def print_step(step: int, total: int, message: str, detail: str = "") -> None:
     step_label = f"[dim]\\[{step}/{total}][/]"
-    check = "[green bold]✓[/]"
+    check = "[green bold]OK[/]"
     detail_text = f"  [dim]{detail}[/]" if detail else ""
     console.print(f"  {step_label} {check} {message}{detail_text}")
 
 
 def print_step_fail(step: int, total: int, message: str, error: str = "") -> None:
     step_label = f"[dim]\\[{step}/{total}][/]"
-    cross = "[red bold]✗[/]"
+    cross = "[red bold]FAIL[/]"
     detail_text = f"  [red]{error}[/]" if error else ""
     console.print(f"  {step_label} {cross} {message}{detail_text}")
 
@@ -295,16 +297,16 @@ def print_info(message: str) -> None:
 
 
 def print_success(message: str) -> None:
-    console.print(f"  [green bold]✓[/] {message}")
+    console.print(f"  [green bold]OK[/] {message}")
 
 
 def print_error(message: str) -> None:
-    console.print(f"  [red bold]✗[/] {message}")
+    console.print(f"  [red bold]FAIL[/] {message}")
 
 
 def print_pipeline_complete(name: str, elapsed: float) -> None:
     console.print()
     console.print(
-        f"  [green bold]✓ {name} complete[/]  [dim]({elapsed:.1f}s)[/]"
+        f"  [green bold]{name} complete[/]  [dim]({elapsed:.1f}s)[/]"
     )
     console.print()

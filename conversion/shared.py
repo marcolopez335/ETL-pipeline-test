@@ -646,7 +646,7 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict,
                 config=publish_config,
             )
             logger.info(f"Published {hyper_path.name} to {label}: {env_cfg['project_name']}")
-            print_success(f"Published to [bold]{label}[/] → {env_cfg['project_name']}")
+            print_success(f"Published to [bold]{label}[/] -> {env_cfg['project_name']}")
         except Exception as exc:
             logger.error(f"Publish to {label} failed: {exc}")
             print_error(f"Publish to {label} failed: {exc}")

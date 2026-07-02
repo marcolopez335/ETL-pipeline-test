@@ -76,7 +76,7 @@ def _compute_sprint_range(df: pl.DataFrame, partition_cols: list[str] = None) ->
         null_pct = null_count / df.height
         if null_pct > 0.10:
             logger.warning(
-                f"SPRINT_VERSION: {null_count}/{df.height} ({null_pct:.0%}) values are null — "
+                f"SPRINT_VERSION: {null_count}/{df.height} ({null_pct:.0%}) values are null - "
                 f"regex may not match SPRINT_NAME format"
             )
 

@@ -30,7 +30,7 @@ def check(label: str, condition: bool, detail: str = "") -> None:
     if condition:
         print(f"  PASS  {label}")
     else:
-        msg = f"{label}{f' — {detail}' if detail else ''}"
+        msg = f"{label}{f' - {detail}' if detail else ''}"
         print(f"  FAIL  {msg}")
         _FAILURES.append(msg)
 
