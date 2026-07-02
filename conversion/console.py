@@ -1,4 +1,5 @@
 import math
+import os
 import sys
 import time
 import threading
@@ -22,7 +23,14 @@ SPINNER_INTERVAL = 0.12
 
 # Animate only when stderr is a real terminal — in cron/CI/redirected runs
 # the \r control characters would just pollute the captured logs.
-_ANIMATE = sys.stderr.isatty()
+# Git Bash caveat: under MinTTY, Python sees pipes (isatty() is False) even
+# though the terminal renders fine. Set FORCE_SPINNER=1 to animate anyway,
+# or FORCE_SPINNER=0 to force the plain line-per-step output on a real TTY.
+_spinner_env = os.environ.get("FORCE_SPINNER")
+if _spinner_env is not None:
+    _ANIMATE = _spinner_env == "1"
+else:
+    _ANIMATE = sys.stderr.isatty()
 
 # Spinner draw coordination: the animator thread and anything that needs a
 # clean line (input prompts) synchronize through this lock + pause event.
