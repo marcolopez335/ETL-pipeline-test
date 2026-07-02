@@ -18,6 +18,74 @@ console = Console()
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 SPINNER_INTERVAL = 0.08
 
+# Animate only when stderr is a real terminal — in cron/CI/redirected runs
+# the \r control characters would just pollute the captured logs.
+_ANIMATE = sys.stderr.isatty()
+
+# Spinner draw coordination: the animator thread and anything that needs a
+# clean line (input prompts) synchronize through this lock + pause event.
+_draw_lock = threading.Lock()
+_pause_event = threading.Event()
+_last_line_len = 0
+
+
+def _clear_spinner_line() -> None:
+    global _last_line_len
+    if _last_line_len:
+        sys.stderr.write("\r" + " " * _last_line_len + "\r")
+        sys.stderr.flush()
+        _last_line_len = 0
+
+
+@contextmanager
+def spinner_paused():
+    """Pause spinner animation and clear its line while the block runs.
+
+    Wrap any code that prompts on stdin so the prompt appears on a clean
+    line instead of fighting the spinner's redraws.
+    """
+    with _draw_lock:
+        _pause_event.set()
+        _clear_spinner_line()
+    try:
+        yield
+    finally:
+        _pause_event.clear()
+
+
+_prompt_guard_installed = False
+
+
+def install_prompt_guard() -> None:
+    """Make every input()/getpass() prompt pause the spinner automatically.
+
+    Credential prompts can fire deep inside the `common` package where we
+    can't wrap them at the call site — so wrap the functions themselves.
+    The prompt gets a clean line; animation resumes when it returns.
+    Idempotent; safe to call once at startup.
+    """
+    global _prompt_guard_installed
+    if _prompt_guard_installed:
+        return
+
+    import builtins
+    import getpass as _getpass_mod
+
+    orig_input = builtins.input
+    orig_getpass = _getpass_mod.getpass
+
+    def guarded_input(prompt=""):
+        with spinner_paused():
+            return orig_input(prompt)
+
+    def guarded_getpass(prompt="Password: ", stream=None):
+        with spinner_paused():
+            return orig_getpass(prompt, stream)
+
+    builtins.input = guarded_input
+    _getpass_mod.getpass = guarded_getpass
+    _prompt_guard_installed = True
+
 
 def _format_bytes(nbytes: int) -> str:
     if nbytes < 1024:
@@ -67,26 +135,47 @@ def step_spinner(step: int, total: int, message: str):
     """Animated spinner that does NOT block stdin.
 
     Runs the animation in a daemon thread using \\r to overwrite a
-    single line.  The terminal stays fully interactive — credential
-    prompts, input(), and getpass() all work while the spinner runs.
+    single line. The terminal stays fully interactive — and with
+    install_prompt_guard() active, any input()/getpass() prompt pauses
+    the animation and gets a clean line.
+
+    When stderr is not a terminal (cron, CI, redirected logs) no control
+    characters are emitted — just a start line and the completion line.
     """
     label = f"[{step}/{total}]"
     start = time.time()
+
+    if not _ANIMATE:
+        sys.stderr.write(f"  {label} ... {message}\n")
+        sys.stderr.flush()
+        try:
+            yield None
+        except Exception:
+            print_step_fail(step, total, message, f"failed after {time.time() - start:.1f}s")
+            raise
+        print_step(step, total, message, f"{time.time() - start:.1f}s")
+        return
+
     stop_event = threading.Event()
 
     def _animate():
+        global _last_line_len
         idx = 0
         while not stop_event.is_set():
-            frame = SPINNER_FRAMES[idx % len(SPINNER_FRAMES)]
-            elapsed = time.time() - start
-            line = f"\r  {label} {frame} {message}... ({elapsed:.1f}s)"
-            sys.stderr.write(line)
-            sys.stderr.flush()
+            with _draw_lock:
+                if not _pause_event.is_set():
+                    frame = SPINNER_FRAMES[idx % len(SPINNER_FRAMES)]
+                    elapsed = time.time() - start
+                    line = f"  {label} {frame} {message}... ({elapsed:.1f}s)"
+                    # Pad so a shorter redraw fully covers the previous line
+                    padded = line + " " * max(0, _last_line_len - len(line))
+                    sys.stderr.write("\r" + padded)
+                    sys.stderr.flush()
+                    _last_line_len = len(line)
             idx += 1
             stop_event.wait(SPINNER_INTERVAL)
-        # Clear the spinner line
-        sys.stderr.write("\r" + " " * 60 + "\r")
-        sys.stderr.flush()
+        with _draw_lock:
+            _clear_spinner_line()
 
     spinner_thread = threading.Thread(target=_animate, daemon=True)
     spinner_thread.start()

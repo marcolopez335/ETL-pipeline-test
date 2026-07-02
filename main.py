@@ -1,13 +1,15 @@
 import argparse
+from logging import WARNING
 from pathlib import Path
 
 import polars as pl
-from common.logging import get_logger, setup_logging, INFO
+from common.logging import get_logger, setup_logging
 
 from conversion import shared
 from conversion.shared import test_connection, load_config
 from conversion.console import (
     print_header, print_success, print_error, print_info, console,
+    install_prompt_guard,
 )
 from conversion import stories_table as stories
 from conversion import epics_table as epics
@@ -16,12 +18,19 @@ from sql_shell import interactive_sql
 SCRIPT_DIR = Path(__file__).parent
 
 # Logging is configured exactly once, here at the entry point.
+# Console handler is WARNING+ so the Rich output is the single narrative on
+# screen — the INFO detail (row counts, cache dedup, etc.) still goes to the
+# log file. Drop to INFO here if you want raw log lines on the console too.
 setup_logging(
     workflow_name=Path(__file__).stem,
     log_dir=SCRIPT_DIR / "logs",
-    console_level=INFO,
+    console_level=WARNING,
 )
 logger = get_logger(__name__)
+
+# Any input()/getpass() prompt (e.g. credential re-entry inside the common
+# package) pauses the spinner and gets a clean line.
+install_prompt_guard()
 
 
 def _load_tables_from_cache(config: dict, load_stories: bool, load_epics: bool) -> dict:

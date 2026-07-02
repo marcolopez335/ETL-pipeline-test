@@ -225,6 +225,33 @@ def test_build_burnup() -> None:
           (dv.hour, dv.minute) == (0, 0), detail=f"got {dv}")
 
 
+def test_prompt_guard_and_spinner_pause() -> None:
+    import builtins
+    import getpass
+    import io
+
+    from conversion.console import install_prompt_guard, spinner_paused
+
+    install_prompt_guard()
+    install_prompt_guard()  # idempotent — must not double-wrap
+
+    check("guard: input() is wrapped", builtins.input.__name__ == "guarded_input")
+    check("guard: getpass() is wrapped", getpass.getpass.__name__ == "guarded_getpass")
+
+    old_stdin = sys.stdin
+    sys.stdin = io.StringIO("hello\n")
+    try:
+        result = builtins.input()
+    finally:
+        sys.stdin = old_stdin
+    check("guard: wrapped input() still reads stdin", result == "hello")
+
+    # Pause context must be safe with no spinner running
+    with spinner_paused():
+        pass
+    check("guard: spinner_paused() no-ops cleanly without a spinner", True)
+
+
 def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
     test_supertype_rules()
@@ -233,6 +260,7 @@ def main() -> int:
     test_cache_merge_replaces_overlapping_keys()
     test_validate_history_and_parallel_fetch()
     test_build_burnup()
+    test_prompt_guard_and_spinner_pause()
 
     print()
     if _FAILURES:
