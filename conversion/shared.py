@@ -626,6 +626,13 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict,
         datasource_name: Name of the datasource on Tableau Server.
     """
     from common.tableau.publish import publish_hyper_to_tableau
+    # tableau_session is a context manager that signs in, yields a connected
+    # TSC.Server, and signs out on exit. Import path may differ across common
+    # versions — try the dedicated session module, then the publish module.
+    try:
+        from common.tableau.session import tableau_session
+    except ImportError:
+        from common.tableau.publish import tableau_session
 
     tab_cfg = config["tableau"]
 
@@ -646,14 +653,24 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict,
         logger.info(f"Publishing {hyper_path.name} to Tableau {label} ({env_cfg['server_url']})")
         print_info(f"Publishing [bold]{hyper_path.name}[/] to Tableau [cyan]{label}[/]")
 
+        # server_key (optional) selects stored credentials, mirroring the DB
+        # side's use_stored_credentials — so no username/password lives in
+        # config. Empty string in YAML is treated as "not set".
+        server_key = env_cfg.get("server_key") or None
+
         try:
-            publish_hyper_to_tableau(
-                server=env_cfg["server_url"],
-                project_name=env_cfg["project_name"],
-                datasource_name=datasource_name,
-                hyper_path=hyper_path,
-                overwrite=env_cfg.get("overwrite", True),
-            )
+            with tableau_session(
+                server_key=server_key,
+                server_url=env_cfg["server_url"],
+                site_id=env_cfg["site_id"],
+            ) as server:
+                publish_hyper_to_tableau(
+                    server=server,
+                    project_name=env_cfg["project_name"],
+                    datasource_name=datasource_name,
+                    hyper_path=hyper_path,
+                    overwrite=env_cfg.get("overwrite", True),
+                )
             logger.info(f"Published {hyper_path.name} to {label}: {env_cfg['project_name']}")
             print_success(f"Published to [bold]{label}[/] -> {env_cfg['project_name']}")
         except Exception as exc:

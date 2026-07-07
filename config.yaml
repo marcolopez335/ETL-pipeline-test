@@ -54,11 +54,13 @@ epics:
 
 tableau:
   tst:
+    server_key: ""      # optional: key into stored credentials (leave "" to use url/site directly)
     server_url: ""
     site_id: ""
     project_name: ""
     overwrite: true
   prd:
+    server_key: ""      # optional: key into stored credentials (leave "" to use url/site directly)
     server_url: ""
     site_id: ""
     project_name: ""
