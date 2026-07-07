@@ -625,7 +625,7 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict,
                  If None, publishes to all configured servers.
         datasource_name: Name of the datasource on Tableau Server.
     """
-    from common.tableau.publish import TableauPublishConfig, publish_hyper_to_tableau
+    from common.tableau.publish import publish_hyper_to_tableau
 
     tab_cfg = config["tableau"]
 
@@ -642,22 +642,17 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict,
             logger.warning(f"Tableau {target}: no server_url configured, skipping")
             continue
 
-        publish_config = TableauPublishConfig(
-            server_url=env_cfg["server_url"],
-            site_id=env_cfg["site_id"],
-            project_name=env_cfg["project_name"],
-            datasource_name=datasource_name,
-            overwrite=env_cfg.get("overwrite", True),
-        )
-
         label = target.upper()
         logger.info(f"Publishing {hyper_path.name} to Tableau {label} ({env_cfg['server_url']})")
         print_info(f"Publishing [bold]{hyper_path.name}[/] to Tableau [cyan]{label}[/]")
 
         try:
             publish_hyper_to_tableau(
+                server=env_cfg["server_url"],
+                project_name=env_cfg["project_name"],
+                datasource_name=datasource_name,
                 hyper_path=hyper_path,
-                config=publish_config,
+                overwrite=env_cfg.get("overwrite", True),
             )
             logger.info(f"Published {hyper_path.name} to {label}: {env_cfg['project_name']}")
             print_success(f"Published to [bold]{label}[/] -> {env_cfg['project_name']}")
