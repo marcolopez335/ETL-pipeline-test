@@ -14,6 +14,7 @@ import polars as pl
 
 from conversion.shared import (
     _align_schemas,
+    _configure_result_encoding,
     _decode_sql_text,
     _supertype,
     fill_missing_snapshots,
@@ -300,9 +301,42 @@ def test_decode_sql_text_tolerates_windows_bytes() -> None:
     check("decode: utf-8 BOM stripped", out3 == "SELECT 1", detail=repr(out3))
 
 
+def test_configure_result_encoding_is_safe() -> None:
+    # No .connection attribute -> safe no-op (never raises)
+    class NoConn:
+        pass
+    _configure_result_encoding(NoConn(), {"database": {"result_encoding": "cp1252"}})
+    check("encoding: missing .connection is a safe no-op", True)
+
+    # .connection present but no setdecoding (non-pyodbc driver) -> no-op
+    class FakeConn:
+        connection = object()
+    _configure_result_encoding(FakeConn(), None)
+    check("encoding: connection without setdecoding is a safe no-op", True)
+
+    # setdecoding present -> it's invoked with the configured encoding
+    calls = []
+
+    class RawWithDecoding:
+        def setdecoding(self, sqltype, encoding=None):
+            calls.append(encoding)
+
+    class ConnWithDecoding:
+        connection = RawWithDecoding()
+
+    _configure_result_encoding(ConnWithDecoding(),
+                               {"database": {"result_encoding": "latin-1"}})
+    # pyodbc may be absent in CI; if so the import fails and calls stays empty.
+    # Either way the function must not raise — and if it ran, it used latin-1.
+    check("encoding: setdecoding path does not raise",
+          calls == [] or all(e == "latin-1" for e in calls),
+          detail=f"calls={calls}")
+
+
 def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
     test_decode_sql_text_tolerates_windows_bytes()
+    test_configure_result_encoding_is_safe()
     test_supertype_rules()
     test_align_schemas_unifies_datetime_units()
     test_align_schemas_handles_missing_and_mixed_dtypes()

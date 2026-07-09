@@ -3,6 +3,7 @@ database:
   use_stored_credentials: true
   parallel_fetch: true        # run independent queries concurrently (set false if the DB limits sessions)
   max_parallel_queries: 4     # cap on concurrent ODBC connections during fetch
+  result_encoding: "cp1252"   # decode DB text as cp1252 (handles Latin-1 chars like non-breaking spaces); use "latin-1" or "utf-8" if needed
 
 paths:
   sql_dir: "sql"
