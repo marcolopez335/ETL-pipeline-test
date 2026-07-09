@@ -101,12 +101,36 @@ def parallel_fetch(jobs: dict, config: dict | None = None) -> dict:
         return {key: fut.result() for key, fut in futures.items()}
 
 
+def _decode_sql_text(raw: bytes, label: str = "SQL") -> str:
+    """Decode SQL bytes, tolerating Windows-edited files.
+
+    SQL files edited on Windows (paste from a browser/Excel/Word) often
+    pick up a raw 0xa0 non-breaking space or other cp1252 bytes, which
+    break a strict UTF-8 read. Strip a UTF-8 BOM, fall back to cp1252 on
+    a decode error, and normalize non-breaking spaces to plain spaces so
+    the query parses regardless of how it was saved.
+    """
+    if raw.startswith(b"\xef\xbb\xbf"):  # UTF-8 BOM
+        raw = raw[3:]
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        logger.warning(
+            f"{label}: not valid UTF-8 ({exc}); decoding as cp1252 and "
+            f"normalizing non-breaking spaces"
+        )
+        text = raw.decode("cp1252")
+    # Normalize non-breaking spaces (U+00A0) to regular spaces — in SQL they
+    # are almost always an accidental whitespace char that should be a space.
+    return text.replace("\u00a0", " ")
+
+
 def load_sql(filename: str) -> str:
     sql_path = SQL_DIR / filename
     if not sql_path.is_file():
         raise FileNotFoundError(f"SQL file not found: {sql_path}")
 
-    return sql_path.read_text(encoding="utf-8")
+    return _decode_sql_text(sql_path.read_bytes(), label=filename)
 
 
 def run_query(

@@ -14,6 +14,7 @@ import polars as pl
 
 from conversion.shared import (
     _align_schemas,
+    _decode_sql_text,
     _supertype,
     fill_missing_snapshots,
     get_last_n_snapshots,
@@ -277,8 +278,31 @@ def test_prompt_guard_and_spinner_pause() -> None:
     check("guard: spinner_paused() no-ops cleanly without a spinner", True)
 
 
+def test_decode_sql_text_tolerates_windows_bytes() -> None:
+    # Plain UTF-8 passes through unchanged
+    check("decode: clean utf-8 unchanged",
+          _decode_sql_text(b"SELECT 1") == "SELECT 1")
+
+    # Raw 0xa0 (cp1252 non-breaking space) at position 0 — the reported crash.
+    # Must not raise, and the nbsp becomes a regular space.
+    raw = b"\xa0SELECT 1"
+    out = _decode_sql_text(raw)
+    check("decode: raw 0xa0 does not raise and becomes a space",
+          out == " SELECT 1", detail=repr(out))
+
+    # UTF-8-encoded nbsp (0xc2 0xa0) is also normalized to a space
+    out2 = _decode_sql_text("SELECT\u00a01".encode("utf-8"))
+    check("decode: utf-8 nbsp normalized to space", out2 == "SELECT 1",
+          detail=repr(out2))
+
+    # UTF-8 BOM is stripped
+    out3 = _decode_sql_text(b"\xef\xbb\xbfSELECT 1")
+    check("decode: utf-8 BOM stripped", out3 == "SELECT 1", detail=repr(out3))
+
+
 def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
+    test_decode_sql_text_tolerates_windows_bytes()
     test_supertype_rules()
     test_align_schemas_unifies_datetime_units()
     test_align_schemas_handles_missing_and_mixed_dtypes()
