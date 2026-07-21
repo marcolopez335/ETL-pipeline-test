@@ -12,6 +12,7 @@ A production ETL pipeline that extracts Jira backlog data from a Tibco database 
 - [Usage](#usage)
 - [Pipelines](#pipelines)
 - [Interactive SQL Query Mode](#interactive-sql-query-mode)
+- [Dashboard Mockup](#dashboard-mockup)
 - [Synthetic Snapshots](#synthetic-snapshots)
 - [Architecture](#architecture)
 - [Features](#features)
@@ -37,6 +38,10 @@ ETL-pipeline-test/
 │   └── display.py                       # Rich table rendering
 ├── sql/                                 # SQL query files (CTE hierarchy)
 ├── schemas/                             # Column dtype definitions
+├── dashboard/                           # Tableau-style dashboard mockup on mock STORIES data
+│   ├── index.html                       # Self-contained dashboard (filters, KPIs, burn-up, grid)
+│   ├── generate_mock_data.py            # Deterministic mock data generator (stdlib only)
+│   └── data/                            # Generated mock extract (JSON + CSV)
 ├── cache/                               # Parquet history caches (auto-generated)
 ├── output/                              # Hyper file output (auto-generated)
 ├── backups/                             # Hyper file backups (auto-generated)
@@ -241,6 +246,17 @@ python -m sql_shell --name epics epics.parquet --name stories stories.parquet
 ```
 
 See [`sql_shell/README.md`](sql_shell/README.md) for full documentation.
+
+## Dashboard Mockup
+
+[`dashboard/`](dashboard/README.md) contains a self-contained, Tableau-style
+dashboard mockup built on fabricated data shaped like the `STORIES.hyper`
+extract: a PI / Program / Team filter shelf, KPI tiles, a burn-up over the
+weekly snapshots, and a spreadsheet-like feature completion grid with health
+chips and expandable story detail. Open `dashboard/index.html` in a browser —
+no server or dependencies. Regenerate the mock data with
+`python dashboard/generate_mock_data.py` (add `--hyper` to also produce
+`output/STORIES_MOCK.hyper` via pantab).
 
 ## Synthetic Snapshots
 
