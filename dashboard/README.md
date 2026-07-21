@@ -18,9 +18,14 @@ Tibco ──► ETL (this repo) ──► STORIES.hyper ──► Tableau workbo
 Open **`dashboard/index.html`** in any browser — no server, no build, no
 network. The mock data is embedded in the page.
 
-- **Filters** (scope every tile, chart, and row): PI · Program · Owner ·
-  Contributor · Release · Health, plus feature search. Multi-select with
-  checkbox popovers, Tableau-style "(All)" semantics.
+- **Filters** (scope every tile, chart, and row): PI · Program ·
+  Capability · Sub-capability · Owner · Contributor · Release · Health,
+  plus feature search. Multi-select with checkbox popovers, Tableau-style
+  "(All)" semantics; Program → Capability → Sub-capability cascade.
+- **Hierarchy breakdown**: the grid's default view groups rows
+  Capability → Sub-capability → Feature with collapsible rollup rows
+  (stories, points, PI % / Total % per level); a toggle switches to the
+  flat table.
 - **KPI tiles**: % points complete (with week-over-week delta), features,
   stories done, needs-attention count.
 - **Burn-up**: done vs planned-ideal vs scope story points across the 10
@@ -66,6 +71,7 @@ rebuilding it as a real Tableau workbook is a straight translation:
 | Dashboard concept | Real `STORIES.hyper` source |
 |---|---|
 | Program filter | `Project Name` |
+| Capability / Sub-capability | `Customercapability Key` / `Subcapability Key` from the epics join (the ACRP hierarchy); display names would come from the capability lookup |
 | Owner filter | Derived from `Sprint Name` (`"Team Falcon 26.1.5"` → `Team Falcon`) — a Tableau calculated field, same idea as the pipeline's `SPRINT_NAME_PATTERN` |
 | Contributor filter | Any team appearing in a feature's story `Sprint Name`s (owner or otherwise) |
 | PI filter | `Program Increment` (with `Pi From Sprint` as fallback) |

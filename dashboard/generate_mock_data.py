@@ -64,6 +64,17 @@ PROGRAMS: dict[str, dict] = {
         "nouns": ["telemetry ingest", "mission scheduler", "crew rostering",
                   "ops console", "maintenance forecasting", "sortie planning",
                   "readiness scoring", "work-order routing"],
+        # Capability -> Sub-capability -> feature domains (nouns)
+        "hierarchy": {
+            "Mission Operations": {
+                "Planning & Scheduling": ["mission scheduler", "sortie planning"],
+                "Command & Monitoring": ["telemetry ingest", "ops console"],
+            },
+            "Fleet Sustainment": {
+                "Predictive Maintenance": ["maintenance forecasting", "readiness scoring"],
+                "Workforce & Logistics": ["crew rostering", "work-order routing"],
+            },
+        },
     },
     "GDX": {
         "name": "Ground Data Exchange",
@@ -72,6 +83,16 @@ PROGRAMS: dict[str, dict] = {
         "nouns": ["data catalog", "ingest pipeline", "API gateway",
                   "schema registry", "archive tiering", "event streaming",
                   "access auditing", "downlink processing"],
+        "hierarchy": {
+            "Data Services": {
+                "Ingest & Processing": ["ingest pipeline", "downlink processing"],
+                "Catalog & Storage": ["data catalog", "archive tiering"],
+            },
+            "Enterprise Integration": {
+                "APIs & Contracts": ["API gateway", "schema registry"],
+                "Streaming & Governance": ["event streaming", "access auditing"],
+            },
+        },
     },
     "VIP": {
         "name": "Vehicle Integration Platform",
@@ -80,8 +101,33 @@ PROGRAMS: dict[str, dict] = {
         "nouns": ["fault diagnostics", "fleet provisioning", "firmware rollout",
                   "sensor calibration", "health monitoring", "config baselining",
                   "test harness", "release gating"],
+        "hierarchy": {
+            "Vehicle Readiness": {
+                "Diagnostics & Health": ["fault diagnostics", "health monitoring"],
+                "Calibration & Config": ["sensor calibration", "config baselining"],
+            },
+            "Release Engineering": {
+                "Provisioning & Firmware": ["fleet provisioning", "firmware rollout"],
+                "Test & Gating": ["test harness", "release gating"],
+            },
+        },
     },
 }
+
+# (program, feature domain) -> capability / sub-capability assignment.
+# Mirrors the epics extract's CUSTOMERCAPABILITY_KEY / SUBCAPABILITY_KEY.
+HIER: dict[tuple[str, str], dict] = {}
+for _pk, _cfg in PROGRAMS.items():
+    _ci = _si = 0
+    for _cap, _subs in _cfg["hierarchy"].items():
+        _ci += 1
+        for _sub, _nouns in _subs.items():
+            _si += 1
+            for _noun in _nouns:
+                HIER[(_pk, _noun)] = {
+                    "capKey": f"{_pk}-C{_ci}", "cap": _cap,
+                    "subKey": f"{_pk}-SC{_si}", "sub": _sub,
+                }
 
 ADJECTIVES = ["Automated", "Unified", "Real-time", "Self-service", "Resilient",
               "Predictive", "Streamlined", "Federated"]
@@ -185,10 +231,13 @@ def build_dataset(seed: int) -> dict:
             feat_seq += rng.randint(1, 3)
             if len(features) % 3 == 0:
                 epic_seq[prog_key] += 1
+            name = name_pool[prog_key].pop()
+            hier = HIER[(prog_key, name.split(" ", 1)[1])]
             feature = {
                 "key": f"FEAT-{feat_seq}",
                 "id": str(700000 + feat_seq),
-                "name": name_pool[prog_key].pop(),
+                "name": name,
+                **hier,
                 "epic": f"{prog_key}-E{epic_seq[prog_key]}",
                 "prog": prog_key,
                 "progName": cfg["name"],
@@ -366,7 +415,8 @@ def build_dataset(seed: int) -> dict:
 # unioned with a current summary row per story, Title Case columns included.
 # ---------------------------------------------------------------------------
 CSV_COLUMNS = [
-    "Story Number", "Feature Id", "Feature Key", "Epic Key", "Project Name",
+    "Story Number", "Feature Id", "Feature Key", "Epic Key",
+    "Customercapability Key", "Subcapability Key", "Project Name",
     "Project Key", "Status", "Resolution", "Issue Type", "Priority", "Assignee",
     "Reporter", "Labels", "Components", "Sprint Name", "Fix Version",
     "Program Increment", "Snapshot Date", "Created Date", "Updated Date",
@@ -411,6 +461,8 @@ def csv_rows(data: dict, rng: random.Random) -> list[dict]:
             "Feature Id": feature["id"],
             "Feature Key": feature["key"],
             "Epic Key": feature["epic"],
+            "Customercapability Key": feature["capKey"],
+            "Subcapability Key": feature["subKey"],
             "Project Name": feature["progName"],
             "Project Key": feature["prog"],
             "Resolution": story["res"] or "",
