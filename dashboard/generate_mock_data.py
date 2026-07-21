@@ -115,6 +115,8 @@ PI_PLAN = [
 
 POINTS = [1, 2, 3, 3, 5, 5, 8, 13]
 DONE_SNAP_WEIGHTS = [2, 3, 4, 5, 6, 6, 5, 5, 4, 3]  # gentle S-curve across the window
+BV_WEIGHTS = [2, 3, 5, 7, 9, 12, 14, 16, 16, 16]    # business value skews high
+PRIOR_PI = {"PI 26.1": "PI 25.4", "PI 26.2": "PI 26.1"}
 
 
 def sprint_windows(pi: str) -> list[tuple[str, date, date]]:
@@ -141,6 +143,12 @@ def sprint_for(pi: str, when: date) -> str:
 def sprint_sort_key(ver: str) -> tuple:
     major, minor, part = ver.split(".")
     return (int(major), int(minor), 99 if part == "IP" else int(part))
+
+
+# Global sprint calendar: version -> (start, end) across every PI.
+SPRINT_ALL: dict[str, tuple[date, date]] = {
+    v: (s, e) for pi in PIS for v, s, e in sprint_windows(pi)
+}
 
 
 def build_dataset(seed: int) -> dict:
@@ -188,6 +196,7 @@ def build_dataset(seed: int) -> dict:
                 "pi": pi,
                 "comp": rng.choice(cfg["components"]),
                 "fixVersion": FIX_VERSIONS[pi],
+                "bv": rng.choices(range(1, 11), weights=BV_WEIGHTS)[0],
                 "profile": profile,
             }
             fi = len(features)
@@ -198,10 +207,30 @@ def build_dataset(seed: int) -> dict:
             total = sum(pts)
             target = rng.uniform(*PROFILES[profile])
 
+            # Carryover: some features span PIs — a slice of their stories was
+            # delivered in the prior PI (drives the PI % vs Total % split).
+            carry_idx: set[int] = set()
+            carry_prob = 0.35 if pi == "PI 26.1" and profile != "done" else \
+                         0.30 if pi == "PI 26.2" else 0.0
+            if carry_prob and rng.random() < carry_prob:
+                k = max(1, round(n_stories * rng.uniform(0.2, 0.4)))
+                carry_idx = set(rng.sample(range(n_stories), k))
+
+            # A contributor team may pick up a few of the current-PI stories.
+            others = [t for t in cfg["teams"] if t != team]
+            contrib_team = rng.choice(others) if others and rng.random() < 0.3 else None
+            contrib_pool = [i2 for i2 in range(n_stories) if i2 not in carry_idx]
+            contrib_idx = set(rng.sample(contrib_pool,
+                                         min(len(contrib_pool), rng.randint(1, 3)))) \
+                if contrib_team and contrib_pool else set()
+
             order = list(range(n_stories))
             rng.shuffle(order)
-            done_set, done_pts = set(), 0
+            done_set = set(carry_idx)                       # carryover is always done
+            done_pts = sum(pts[i2] for i2 in carry_idx)
             for idx in order:
+                if idx in done_set:
+                    continue
                 if done_pts / total >= target:
                     break
                 done_set.add(idx)
@@ -217,9 +246,21 @@ def build_dataset(seed: int) -> dict:
                 story_seq[prog_key] += rng.randint(1, 4)
                 key = f"{prog_key}-{story_seq[prog_key]}"
                 is_done = si in done_set
+                s_team = contrib_team if si in contrib_idx else team
 
                 # Created / done snapshot indices drive burnup + status history.
-                if pi == "PI 25.4":
+                if si in carry_idx and pi == "PI 26.1":     # delivered back in 25.4
+                    c, d = 0, 0
+                    status, sprint = "Done", rng.choice(["25.4.3", "25.4.4", "25.4.5", "25.4.IP"])
+                    created = PIS["PI 25.4"][0] + timedelta(days=rng.randint(0, 45))
+                    resolved = SPRINT_ALL[sprint][1] - timedelta(days=rng.randint(0, 10))
+                elif si in carry_idx:                        # 26.2 feature, work done in 26.1
+                    c, d = 0, rng.randint(3, 8)
+                    status, sprint = "Done", rng.choice(["26.1.3", "26.1.4", "26.1.5"])
+                    created = PIS["PI 26.1"][0] + timedelta(days=rng.randint(0, 21))
+                    resolved = max(SNAPSHOTS[d] - timedelta(days=rng.randint(0, 6)),
+                                   created + timedelta(days=1))
+                elif pi == "PI 25.4":
                     c = 0
                     d = 0 if is_done else None
                     created = PIS[pi][0] + timedelta(days=rng.randint(-21, 30))
@@ -235,38 +276,45 @@ def build_dataset(seed: int) -> dict:
                     created = (PIS[pi][0] - timedelta(days=rng.randint(0, 28)) if c == 0
                                else SNAPSHOTS[c] - timedelta(days=rng.randint(0, 6)))
 
-                if is_done:
-                    status = "Done"
-                elif si in blocked_set:
-                    status = "Blocked"
-                elif profile == "planned":
-                    status = "In Progress" if si == 0 and rng.random() < 0.3 else "Open"
-                else:
-                    status = rng.choices(["In Progress", "In Review", "Open"],
-                                         weights=[38, 14, 48])[0]
-
-                if d is not None:
-                    if pi == "PI 25.4":
-                        resolved = created + timedelta(days=rng.randint(10, 60))
-                        resolved = min(resolved, PIS[pi][1])
+                if si not in carry_idx:
+                    if is_done:
+                        status = "Done"
+                    elif si in blocked_set:
+                        status = "Blocked"
+                    elif profile == "planned":
+                        status = "In Progress" if si == 0 and rng.random() < 0.3 else "Open"
                     else:
-                        resolved = SNAPSHOTS[d] - timedelta(days=rng.randint(0, 6))
-                        resolved = max(resolved, created + timedelta(days=1))
-                    sprint = sprint_for(pi, resolved)
-                else:
-                    resolved = None
-                    active = sprint_for(pi, CURRENT_SNAPSHOT) if pi != "PI 26.2" else None
-                    sprint = (rng.choice(["26.2.1", "26.2.1", "26.2.2"]) if pi == "PI 26.2"
-                              else (active if status != "Open" or rng.random() < 0.6
-                                    else sprint_windows(pi)[-1][0]))
+                        status = rng.choices(["In Progress", "In Review", "Open"],
+                                             weights=[38, 14, 48])[0]
 
-                stories.append({
+                    if d is not None:
+                        if pi == "PI 25.4":
+                            resolved = created + timedelta(days=rng.randint(10, 60))
+                            resolved = min(resolved, PIS[pi][1])
+                        else:
+                            resolved = SNAPSHOTS[d] - timedelta(days=rng.randint(0, 6))
+                            resolved = max(resolved, created + timedelta(days=1))
+                        sprint = sprint_for(pi, resolved)
+                    else:
+                        resolved = None
+                        active = sprint_for(pi, CURRENT_SNAPSHOT) if pi != "PI 26.2" else None
+                        if pi == "PI 26.2":
+                            sprint = rng.choice(["26.2.1", "26.2.1", "26.2.2"])
+                        elif rng.random() < 0.35:
+                            # planned in an earlier sprint but slipped — keeps the
+                            # ideal line honest (open work that should be done)
+                            sprint = rng.choice(["26.1.2", "26.1.3", "26.1.4"])
+                        else:
+                            sprint = (active if status != "Open" or rng.random() < 0.6
+                                      else sprint_windows(pi)[-1][0])
+
+                entry = {
                     "k": key,
                     "f": fi,
                     "st": status,
                     "pts": pts[si],
                     "sp": sprint,
-                    "as": rng.choice(roster[team]),
+                    "as": rng.choice(roster[s_team]),
                     "pr": rng.choices(["Low", "Medium", "High", "Critical"],
                                       weights=[15, 55, 25, 5])[0],
                     "ty": rng.choices(["Story", "Task", "Bug"], weights=[72, 18, 10])[0],
@@ -276,12 +324,21 @@ def build_dataset(seed: int) -> dict:
                     "cr": created.isoformat(),
                     "rs": resolved.isoformat() if resolved else None,
                     "lb": ";".join(x for x in {rng.choice(LABEL_POOL)} if x) or None,
-                })
+                }
+                if s_team != team:
+                    entry["tm"] = s_team
+                stories.append(entry)
 
-    # Sprint range per feature — the AgileSprintRange concept (IP sorts last).
+    # Sprint range per feature — the AgileSprintRange concept (IP sorts last) —
+    # plus planned start/end dates and the Accepted flag for fully-done work.
     for fi, feature in enumerate(features):
-        vers = sorted({s["sp"] for s in stories if s["f"] == fi}, key=sprint_sort_key)
+        ss = [s for s in stories if s["f"] == fi]
+        vers = sorted({s["sp"] for s in ss}, key=sprint_sort_key)
         feature["minSprint"], feature["maxSprint"] = vers[0], vers[-1]
+        feature["start"] = SPRINT_ALL[vers[0]][0].isoformat()
+        feature["end"] = SPRINT_ALL[vers[-1]][1].isoformat()
+        feature["accepted"] = bool(all(s["st"] == "Done" for s in ss)
+                                   and rng.random() < 0.6)
         feature.pop("profile")
 
     return {
@@ -347,8 +404,8 @@ def csv_rows(data: dict, rng: random.Random) -> list[dict]:
     for story in data["stories"]:
         feature = data["features"][story["f"]]
         pi = feature["pi"]
-        windows = {v: (s, e) for v, s, e in sprint_windows(pi)}
-        begin, end = windows.get(story["sp"], (None, None))
+        story_team = story.get("tm") or feature["team"]
+        begin, end = SPRINT_ALL.get(story["sp"], (None, None))
         base = {
             "Story Number": story["k"],
             "Feature Id": feature["id"],
@@ -363,7 +420,7 @@ def csv_rows(data: dict, rng: random.Random) -> list[dict]:
             "Reporter": reporters[feature["team"]],
             "Labels": story["lb"] or "",
             "Components": feature["comp"],
-            "Sprint Name": f"{feature['team']} {story['sp']}",
+            "Sprint Name": f"{story_team} {story['sp']}",
             "Fix Version": feature["fixVersion"],
             "Program Increment": pi,
             "Created Date": story["cr"],

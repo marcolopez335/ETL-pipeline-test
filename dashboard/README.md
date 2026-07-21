@@ -18,17 +18,22 @@ Tibco ──► ETL (this repo) ──► STORIES.hyper ──► Tableau workbo
 Open **`dashboard/index.html`** in any browser — no server, no build, no
 network. The mock data is embedded in the page.
 
-- **Filters** (scope every tile, chart, and row): PI · Program · Team ·
-  Health, plus feature search. Multi-select with checkbox popovers,
-  Tableau-style "(All)" semantics.
+- **Filters** (scope every tile, chart, and row): PI · Program · Owner ·
+  Contributor · Release · Health, plus feature search. Multi-select with
+  checkbox popovers, Tableau-style "(All)" semantics.
 - **KPI tiles**: % points complete (with week-over-week delta), features,
   stories done, needs-attention count.
-- **Burn-up**: done vs scope story points across the 10 weekly Monday
-  snapshots. Hover or focus + arrow keys for the crosshair readout.
+- **Burn-up**: done vs planned-ideal vs scope story points across the 10
+  weekly Monday snapshots, with a value label on every snapshot point
+  (matching the prd workbook). Hover or focus + arrow keys for the
+  crosshair readout.
 - **Completion by team**: click a bar to cross-filter, like Tableau's
   "use as filter".
-- **Feature grid**: sortable columns, progress meters, health chips, and
-  expandable rows showing the underlying stories.
+- **Feature grid**: sortable columns (BV, planned start–end dates,
+  stories, points), split **PI %** vs **Total %** meters for features that
+  carry work across PIs, health chips (incl. Accepted), and expandable
+  rows showing the underlying stories with their owning/contributing team.
+- **Analysis / corrective action** notes panel (persisted in the browser).
 - Light/dark theme via the toggle (or follows the OS in Auto).
 
 ## Files
@@ -61,18 +66,23 @@ rebuilding it as a real Tableau workbook is a straight translation:
 | Dashboard concept | Real `STORIES.hyper` source |
 |---|---|
 | Program filter | `Project Name` |
-| Team filter | Derived from `Sprint Name` (`"Team Falcon 26.1.5"` → `Team Falcon`) — a Tableau calculated field, same idea as the pipeline's `SPRINT_NAME_PATTERN` |
+| Owner filter | Derived from `Sprint Name` (`"Team Falcon 26.1.5"` → `Team Falcon`) — a Tableau calculated field, same idea as the pipeline's `SPRINT_NAME_PATTERN` |
+| Contributor filter | Any team appearing in a feature's story `Sprint Name`s (owner or otherwise) |
 | PI filter | `Program Increment` (with `Pi From Sprint` as fallback) |
-| Sprint column | `Sprint Name Alt`; the per-feature range mirrors the epics pipeline's `MIN_SPRINT`/`MAX_SPRINT` |
-| Progress % | `SUM(Story Points if Status = Done) / SUM(Story Points)` per `Feature Key` |
+| Release filter | `Fix Version` (the ACRP target-release concept) |
+| Planned start–end | Sprint calendar span of the feature's stories — the epics pipeline's `MIN_SPRINT`/`MAX_SPRINT` |
+| Total % | `SUM(Story Points if Status = Done) / SUM(Story Points)` per `Feature Key` |
+| PI % | Same ratio over only the stories whose `Pi From Sprint` matches the feature's PI (carryover from prior PIs is excluded) |
 | Burn-up | Weekly Monday `Snapshot Date` history (the pipeline's synthetic-snapshot fill guarantees the axis has no gaps) |
+| Ideal line | Cumulative points of stories whose planned sprint has ended by each snapshot |
 | Week-over-week delta | Current snapshot vs prior Monday |
 
-Fabricated for the mockup (not in the stories schema): feature display names
-and story-level health thresholds. In a real workbook, feature names would come
-from the epics join, and health rules would be a team decision
-(here: `gap = PI-elapsed-% − points-done-%`; < 15 pts on track, < 32 pts at
-risk, otherwise behind; ≥ 2 blocked stories → blocked).
+Fabricated for the mockup (not in the stories schema): feature display names,
+business value, the Accepted flag, and story-level health thresholds. In a
+real workbook those would come from the epics join, and health rules would be
+a team decision (here: `gap = PI-elapsed-% − PI-slice-done-%`; < 15 pts on
+track, < 32 pts at risk, otherwise behind; ≥ 2 blocked stories → blocked;
+fully done + sign-off → Accepted).
 
 ## Notes
 
