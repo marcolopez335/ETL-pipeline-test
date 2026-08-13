@@ -6,9 +6,10 @@ ETL pipeline modules that extract data from Tibco via ODBC, transform it with Po
 
 | File | Description |
 |------|-------------|
-| `shared.py` | Shared utilities — config loading, SQL execution, lazy caching, schema alignment, backup rotation, Hyper export, Tableau publishing |
+| `shared.py` | Shared utilities — config loading, SQL execution, lazy caching, schema alignment, backup rotation, column renaming, Hyper export, Tableau publishing |
 | `stories_table.py` | Stories pipeline — fetches summary + epics, joins, adds computed columns, exports to Hyper |
 | `epics_table.py` | Epics pipeline — fetches summary + history, builds ACRP release range view, exports to Hyper |
+| `burnup_table.py` | Feature burn-up view — unpivots date columns into long-format date events |
 | `console.py` | Rich terminal output — spinners, colored summary tables, progress indicators |
 
 ## Architecture
@@ -25,7 +26,7 @@ Each pipeline follows the same pattern:
 ## Key Implementation Details
 
 - `run_query` uses the ODBC driver (returns pandas), then converts via `pl.from_pandas()`. Any all-null columns are cast from `Null` to `Utf8` immediately.
-- `export_hyper` converts back to pandas for pantab compatibility. All-null columns in the pandas DataFrame are forced to `str` dtype to prevent pantab's "unsupported Arrow type: na" error.
+- `export_hyper` hands pantab an Arrow table (Polars → Arrow is near zero-copy). All-null columns are cast to string first to prevent pantab's "unsupported Arrow type: na" error.
 - `_align_schemas` reconciles column types and order before `pl.concat` — Polars is strict about schema matching. Handles `Null` vs typed columns, missing columns, and type mismatches.
 - Batch `n_unique()` is wrapped in try/except to handle unsupported types like `Decimal`, with per-column fallback.
 

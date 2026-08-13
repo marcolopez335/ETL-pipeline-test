@@ -288,8 +288,8 @@ Next run (DB has Mar 9 now):
                           │               │
                           └──── union ────┘
                                   │
-                           data_functions()
-                            (transforms)
+                           apply_transforms()
+                            (computed cols)
                                   │
                         ┌─────────┴─────────┐
                         │                   │

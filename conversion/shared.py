@@ -34,6 +34,10 @@ OUTPUT_DIR = ROOT_DIR / "output"
 logger = get_logger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Config & paths
+# ---------------------------------------------------------------------------
+
 def load_config() -> dict:
     """Load config.yaml and apply path overrides to module-level dirs.
 
@@ -72,6 +76,10 @@ def get_output_path(filename: str) -> Path:
     """Return the absolute path for an output file under the configured OUTPUT_DIR."""
     return OUTPUT_DIR / filename
 
+
+# ---------------------------------------------------------------------------
+# Database access & SQL loading
+# ---------------------------------------------------------------------------
 
 def _use_stored_credentials(config: dict | None) -> bool:
     if not config:
@@ -222,6 +230,10 @@ def test_connection(database: str = "default", config: dict | None = None) -> bo
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Dtypes & schema alignment
+# ---------------------------------------------------------------------------
+
 def clean_dtypes(df: pl.DataFrame, schema: dict) -> pl.DataFrame:
     casts = []
     for col, dtype in schema.items():
@@ -239,122 +251,6 @@ def clean_dtypes(df: pl.DataFrame, schema: dict) -> pl.DataFrame:
         df = df.with_columns(casts)
 
     return df
-
-
-# Full per-column stats (null %, n_unique, min/max) are expensive at 4M+ rows
-# and run once per pipeline step. Off by default; enabled via --verbose.
-_VERBOSE_SUMMARIES = False
-
-
-def set_verbose_summaries(verbose: bool) -> None:
-    global _VERBOSE_SUMMARIES
-    _VERBOSE_SUMMARIES = bool(verbose)
-
-
-def log_dataframe_summary(df: pl.DataFrame, label: str) -> None:
-    total_mem = df.estimated_size()
-    logger.info(f"--- {label} Summary ---")
-    logger.info(f"  Rows: {df.height}  Columns: {df.width}  Memory: {total_mem:,} bytes")
-
-    if not _VERBOSE_SUMMARIES:
-        print_info(
-            f"[bold]{label}[/]: {df.height:,} rows x {df.width} cols  "
-            f"[dim]({total_mem / 1024 ** 2:.1f} MB)[/]"
-        )
-        return
-
-    # Compute stats once and share with both logger and console display
-    null_counts = df.null_count()
-    try:
-        n_unique = df.select(pl.all().n_unique())
-    except Exception:
-        n_unique = None
-
-    total_nulls = 0
-    for col in df.columns:
-        null_count = null_counts[col][0]
-        total_nulls += null_count
-        null_pct = (null_count / df.height * 100) if df.height > 0 else 0.0
-        if n_unique is not None:
-            unique_count = n_unique[col][0]
-        else:
-            try:
-                unique_count = df[col].n_unique()
-            except Exception:
-                unique_count = -1
-        unique_str = str(unique_count) if unique_count >= 0 else "n/a"
-        logger.info(f"    {col:<30} {str(df[col].dtype):<20} nulls: {null_count} ({null_pct:.1f}%)  uniques: {unique_str}")
-    total_cells = df.height * df.width
-    total_null_pct = (total_nulls / total_cells * 100) if total_cells > 0 else 0.0
-    logger.info(f"  Total null %: {total_null_pct:.1f}%")
-
-    # Pass pre-computed stats so print_polars_summary doesn't recompute n_unique
-    print_polars_summary(df, label, null_counts=null_counts, n_unique=n_unique)
-
-
-def backup_file(file_path: Path, config: dict) -> None:
-    backup_cfg = config.get("backup", {})
-    if not backup_cfg.get("enabled", True):
-        return
-
-    if not file_path.exists():
-        return
-
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_name = f"{file_path.stem}_{timestamp}{file_path.suffix}"
-    backup_path = BACKUP_DIR / backup_name
-
-    shutil.copy2(file_path, backup_path)
-    logger.info(f"Backed up {file_path.name} -> {backup_path}")
-    print_info(f"Backup: [dim]{backup_name}[/]")
-
-    max_backups = backup_cfg.get("max_backups", 5)
-    existing = sorted(
-        BACKUP_DIR.glob(f"{file_path.stem}_*{file_path.suffix}"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    for old in existing[max_backups:]:
-        old.unlink()
-        logger.info(f"Removed old backup: {old.name}")
-
-
-def read_history_cache(cache_path: Path) -> pl.LazyFrame | None:
-    if not cache_path.exists():
-        logger.info(f"No cache found at {cache_path}")
-        return None
-
-    lf = pl.scan_parquet(cache_path)
-    logger.info(f"Lazy-scanning cache: {cache_path}")
-    return lf
-
-
-def write_history_cache(df: pl.DataFrame, cache_path: Path, config: dict = None) -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    # Backup existing cache before overwrite
-    if config is not None:
-        cache_cfg = config.get("cache", {})
-        if cache_cfg.get("backup_enabled", False) and cache_path.exists():
-            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_name = f"{cache_path.stem}_{timestamp}{cache_path.suffix}"
-            backup_path = BACKUP_DIR / backup_name
-            shutil.copy2(cache_path, backup_path)
-            logger.info(f"Cache backup: {cache_path.name} -> {backup_name}")
-            # Rotate old cache backups
-            max_backups = cache_cfg.get("max_cache_backups", 3)
-            existing = sorted(
-                BACKUP_DIR.glob(f"{cache_path.stem}_*{cache_path.suffix}"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            for old in existing[max_backups:]:
-                old.unlink()
-                logger.info(f"Removed old cache backup: {old.name}")
-    df.write_parquet(cache_path)
-    logger.info(f"Wrote {df.height} rows to cache: {cache_path}")
 
 
 def _safe_dtype(dtype: pl.DataType) -> pl.DataType:
@@ -423,6 +319,118 @@ def _align_schemas(df1: pl.DataFrame, df2: pl.DataFrame) -> tuple[pl.DataFrame, 
     return df1, df2
 
 
+# ---------------------------------------------------------------------------
+# Console summaries
+# ---------------------------------------------------------------------------
+
+# Full per-column stats (null %, n_unique, min/max) are expensive at 4M+ rows
+# and run once per pipeline step. Off by default; enabled via --verbose.
+_VERBOSE_SUMMARIES = False
+
+
+def set_verbose_summaries(verbose: bool) -> None:
+    global _VERBOSE_SUMMARIES
+    _VERBOSE_SUMMARIES = bool(verbose)
+
+
+def log_dataframe_summary(df: pl.DataFrame, label: str) -> None:
+    total_mem = df.estimated_size()
+    logger.info(f"--- {label} Summary ---")
+    logger.info(f"  Rows: {df.height}  Columns: {df.width}  Memory: {total_mem:,} bytes")
+
+    if not _VERBOSE_SUMMARIES:
+        print_info(
+            f"[bold]{label}[/]: {df.height:,} rows x {df.width} cols  "
+            f"[dim]({total_mem / 1024 ** 2:.1f} MB)[/]"
+        )
+        return
+
+    # Compute stats once and share with both logger and console display
+    null_counts = df.null_count()
+    try:
+        n_unique = df.select(pl.all().n_unique())
+    except Exception:
+        n_unique = None
+
+    total_nulls = 0
+    for col in df.columns:
+        null_count = null_counts[col][0]
+        total_nulls += null_count
+        null_pct = (null_count / df.height * 100) if df.height > 0 else 0.0
+        if n_unique is not None:
+            unique_count = n_unique[col][0]
+        else:
+            try:
+                unique_count = df[col].n_unique()
+            except Exception:
+                unique_count = -1
+        unique_str = str(unique_count) if unique_count >= 0 else "n/a"
+        logger.info(f"    {col:<30} {str(df[col].dtype):<20} nulls: {null_count} ({null_pct:.1f}%)  uniques: {unique_str}")
+    total_cells = df.height * df.width
+    total_null_pct = (total_nulls / total_cells * 100) if total_cells > 0 else 0.0
+    logger.info(f"  Total null %: {total_null_pct:.1f}%")
+
+    # Pass pre-computed stats so print_polars_summary doesn't recompute n_unique
+    print_polars_summary(df, label, null_counts=null_counts, n_unique=n_unique)
+
+
+# ---------------------------------------------------------------------------
+# Backups
+# ---------------------------------------------------------------------------
+
+def _backup_with_rotation(file_path: Path, keep: int) -> str:
+    """Copy ``file_path`` into BACKUP_DIR with a timestamp suffix, pruning the
+    oldest copies beyond ``keep``. Returns the backup filename."""
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_name = f"{file_path.stem}_{timestamp}{file_path.suffix}"
+    shutil.copy2(file_path, BACKUP_DIR / backup_name)
+    logger.info(f"Backed up {file_path.name} -> {backup_name}")
+
+    existing = sorted(
+        BACKUP_DIR.glob(f"{file_path.stem}_*{file_path.suffix}"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for old in existing[keep:]:
+        old.unlink()
+        logger.info(f"Removed old backup: {old.name}")
+    return backup_name
+
+
+def backup_file(file_path: Path, config: dict) -> None:
+    """Back up an output file before overwrite, honoring the ``backup:`` config."""
+    backup_cfg = config.get("backup", {})
+    if not backup_cfg.get("enabled", True) or not file_path.exists():
+        return
+    backup_name = _backup_with_rotation(file_path, keep=backup_cfg.get("max_backups", 5))
+    print_info(f"Backup: [dim]{backup_name}[/]")
+
+
+# ---------------------------------------------------------------------------
+# History cache
+# ---------------------------------------------------------------------------
+
+def read_history_cache(cache_path: Path) -> pl.LazyFrame | None:
+    if not cache_path.exists():
+        logger.info(f"No cache found at {cache_path}")
+        return None
+
+    lf = pl.scan_parquet(cache_path)
+    logger.info(f"Lazy-scanning cache: {cache_path}")
+    return lf
+
+
+def write_history_cache(df: pl.DataFrame, cache_path: Path, config: dict | None = None) -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    # Back up the existing cache before overwrite, honoring the ``cache:`` config
+    cache_cfg = (config or {}).get("cache", {})
+    if cache_cfg.get("backup_enabled", False) and cache_path.exists():
+        _backup_with_rotation(cache_path, keep=cache_cfg.get("max_cache_backups", 3))
+    df.write_parquet(cache_path)
+    logger.info(f"Wrote {df.height} rows to cache: {cache_path}")
+
+
 def validate_history(df: pl.DataFrame, key_col: str) -> pl.DataFrame:
     """Check required history columns and normalize SNAPSHOT_DATE to Date."""
     required = {key_col, "SNAPSHOT_DATE"}
@@ -455,9 +463,9 @@ def history_fetch_plan(cache_path: Path, sql_full: str, sql_recent: str) -> tupl
 
 def update_history_cache_with_recent(
     cached_lf: pl.LazyFrame, recent: pl.DataFrame, key_col: str,
-    config: dict = None,
+    config: dict | None = None,
 ) -> pl.DataFrame:
-    KEY_COLS = [key_col, "SNAPSHOT_DATE"]
+    key_cols = [key_col, "SNAPSHOT_DATE"]
 
     # Cast SNAPSHOT_DATE to Date (not Datetime) — snapshots are daily, and
     # Date avoids precision mismatches (us vs ns) between cache and fresh query
@@ -476,8 +484,8 @@ def update_history_cache_with_recent(
     cached_count = cached_lf.select(pl.len()).collect().item()
 
     # Anti-join lazily — Polars only scans the parquet rows it needs
-    recent_keys = recent.lazy().select(KEY_COLS).unique()
-    cached_keep = cached_lf.join(recent_keys, on=KEY_COLS, how="anti").collect()
+    recent_keys = recent.lazy().select(key_cols).unique()
+    cached_keep = cached_lf.join(recent_keys, on=key_cols, how="anti").collect()
 
     removed = cached_count - cached_keep.height
     logger.info(
@@ -492,7 +500,7 @@ def update_history_cache_with_recent(
     combined = pl.concat([cached_keep, recent])
     del cached_keep, recent
 
-    combined = combined.drop_nulls(subset=KEY_COLS).unique(subset=KEY_COLS, keep="last")
+    combined = combined.drop_nulls(subset=key_cols).unique(subset=key_cols, keep="last")
 
     min_retention = 0.98
     if config is not None:
@@ -507,7 +515,7 @@ def update_history_cache_with_recent(
     return combined
 
 
-def build_and_cache_history(sql_full: str, key_col: str, cache_path: Path, config: dict = None) -> pl.DataFrame:
+def build_and_cache_history(sql_full: str, key_col: str, cache_path: Path, config: dict | None = None) -> pl.DataFrame:
     logger.info("Building full history cache")
     db = (config or {}).get("database", {}).get("name", "default")
     df = fetch_history(sql_full, key_col, database=db, config=config)
@@ -517,7 +525,7 @@ def build_and_cache_history(sql_full: str, key_col: str, cache_path: Path, confi
 
 def update_history(
     sql_full: str, sql_recent: str, key_col: str, cache_path: Path,
-    config: dict = None, force: bool = False,
+    config: dict | None = None, force: bool = False,
     prefetched: pl.DataFrame | None = None, prefetched_kind: str | None = None,
 ) -> pl.DataFrame:
     """Merge fresh history into the cache.
@@ -553,7 +561,11 @@ def update_history(
     return updated
 
 
-def get_last_n_snapshots(n: int, day_of_week: int = 0, from_date: datetime = None) -> list[datetime]:
+# ---------------------------------------------------------------------------
+# Snapshot filling & unioning
+# ---------------------------------------------------------------------------
+
+def get_last_n_snapshots(n: int, day_of_week: int = 0, from_date: datetime | None = None) -> list[datetime]:
     """Get the last n snapshot days up to and including the most recent one.
 
     Args:
@@ -569,22 +581,18 @@ def get_last_n_snapshots(n: int, day_of_week: int = 0, from_date: datetime = Non
     return [most_recent - timedelta(weeks=i) for i in range(n)]
 
 
-# Keep old name as alias for backwards compatibility
-def get_last_n_mondays(n: int, from_date: datetime = None) -> list[datetime]:
-    return get_last_n_snapshots(n, day_of_week=0, from_date=from_date)
-
-
 def fill_missing_snapshots(
     df_summary: pl.DataFrame,
     df_history: pl.DataFrame,
     key_col: str,
-    config: dict = None,
+    config: dict | None = None,
 ) -> pl.DataFrame:
-    """Fill missing Monday snapshots in history using summary data.
+    """Fill missing weekly snapshots in history using summary data.
 
-    Checks the last n_mondays Mondays. For any Monday where no snapshot
-    exists in df_history, creates a synthetic snapshot from df_summary
-    with SNAPSHOT_DATE set to that Monday and IS_SYNTHETIC = True.
+    Checks the last ``snapshots.lookback_weeks`` snapshot days (the weekday
+    set by ``snapshots.day_of_week``). For any snapshot day missing from
+    df_history, creates a synthetic snapshot from df_summary with
+    SNAPSHOT_DATE set to that day and IS_SYNTHETIC = True.
 
     When the database later provides the real snapshot, the cache update's
     anti-join will replace the synthetic row automatically.
@@ -593,7 +601,7 @@ def fill_missing_snapshots(
     day_of_week = snap_cfg.get("day_of_week", 0)
     n_weeks = snap_cfg.get("lookback_weeks", 4)
 
-    mondays = get_last_n_snapshots(n_weeks, day_of_week=day_of_week)
+    expected_days = get_last_n_snapshots(n_weeks, day_of_week=day_of_week)
 
     # Get existing snapshot dates from history
     existing_dates = set()
@@ -603,34 +611,35 @@ def fill_missing_snapshots(
         ).unique().to_series().to_list()
         existing_dates = {d for d in dates if d is not None}
 
-    # Find missing Mondays — exclude today because the summary already
+    # Find missing snapshot days — exclude today because the summary already
     # represents current-day data; synthesizing today duplicates it
     today = datetime.now().date()
-    missing_mondays = [m for m in mondays if m.date() not in existing_dates and m.date() != today]
+    missing_days = [d for d in expected_days
+                    if d.date() not in existing_dates and d.date() != today]
 
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     day_name = day_names[day_of_week]
 
-    if not missing_mondays:
+    if not missing_days:
         logger.info(f"No missing snapshots in the last {n_weeks} {day_name}s")
         return df_history
 
-    logger.info(f"Found {len(missing_mondays)} missing {day_name} snapshot(s)")
-    for m in sorted(missing_mondays):
-        logger.info(f"  Missing: {m.strftime('%Y-%m-%d')} ({day_name})")
+    logger.info(f"Found {len(missing_days)} missing {day_name} snapshot(s)")
+    for d in sorted(missing_days):
+        logger.info(f"  Missing: {d.strftime('%Y-%m-%d')} ({day_name})")
 
     # Build synthetic snapshots from summary data
     summary_cols = [c for c in df_summary.columns if c not in ("SNAPSHOT_DATE", "IS_SYNTHETIC")]
     base = df_summary.select(summary_cols)
 
     synthetic_frames = []
-    for monday in sorted(missing_mondays):
+    for snapshot_day in sorted(missing_days):
         snapshot = base.with_columns([
-            pl.lit(monday.date()).alias("SNAPSHOT_DATE"),
+            pl.lit(snapshot_day.date()).alias("SNAPSHOT_DATE"),
             pl.lit(True).alias("IS_SYNTHETIC"),
         ])
         synthetic_frames.append(snapshot)
-        logger.info(f"  Synthesized {snapshot.height} rows for {monday.strftime('%Y-%m-%d')}")
+        logger.info(f"  Synthesized {snapshot.height} rows for {snapshot_day.strftime('%Y-%m-%d')}")
 
     synthetic = pl.concat(synthetic_frames)
 
@@ -651,6 +660,34 @@ def union_data(df_summary: pl.DataFrame, df_history: pl.DataFrame) -> pl.DataFra
     unioned = pl.concat([df_summary, df_history])
     return unioned.unique()
 
+
+# ---------------------------------------------------------------------------
+# Column naming
+# ---------------------------------------------------------------------------
+
+# Extracts a short sprint version like "26.1.2" or "26.1.IP" from a sprint
+# name like "AMMM 26.1.IP". Note the second dot is unescaped (matches any
+# character) — kept as-is to preserve the historical match behavior.
+SPRINT_VERSION_PATTERN = r"(\d{2}\.\d.\w+)"
+
+
+def rename_to_title_case(df: pl.DataFrame) -> pl.DataFrame:
+    """Rename SCREAMING_SNAKE_CASE columns to Title Case for Tableau.
+
+    e.g. ``FEATURE_KEY`` -> ``Feature Key``. Applied as the last transform
+    before export so the .hyper files show friendly column names.
+    """
+    return df.rename({col: col.lower().replace("_", " ").title() for col in df.columns})
+
+
+def rename_to_snake_case(df: pl.DataFrame) -> pl.DataFrame:
+    """Inverse of :func:`rename_to_title_case` — ``Feature Key`` -> ``FEATURE_KEY``."""
+    return df.rename({col: col.upper().replace(" ", "_") for col in df.columns})
+
+
+# ---------------------------------------------------------------------------
+# Export & publish (Tableau)
+# ---------------------------------------------------------------------------
 
 def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: dict) -> None:
     import pantab as pt
@@ -675,8 +712,9 @@ def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: di
     logger.info(f"Exported {df.height} rows to {hyper_path} (table: {table_name})")
 
 
-def publish_hyper(hyper_path: Path, table_name: str, config: dict,
-                   targets: list[str] = None, datasource_name: str = None) -> None:
+def publish_hyper(hyper_path: Path, config: dict,
+                  targets: list[str] | None = None,
+                  datasource_name: str | None = None) -> None:
     """Publish a hyper file to one or more Tableau servers.
 
     Args:

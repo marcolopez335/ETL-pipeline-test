@@ -4,9 +4,10 @@ import polars as pl
 from common.logging import get_logger
 from schemas.datatypes import EXPECTED_DTYPES_EPICS
 from conversion.shared import (
-    OUTPUT_DIR, get_cache_path, run_query, clean_dtypes, update_history,
-    union_data, export_hyper, log_dataframe_summary, publish_hyper,
-    fill_missing_snapshots, history_fetch_plan, parallel_fetch,
+    OUTPUT_DIR, SPRINT_VERSION_PATTERN, get_cache_path, run_query, clean_dtypes,
+    update_history, union_data, export_hyper, log_dataframe_summary,
+    publish_hyper, fill_missing_snapshots, history_fetch_plan, parallel_fetch,
+    rename_to_snake_case, rename_to_title_case,
 )
 from conversion.console import (
     print_header, step_spinner, print_pipeline_complete,
@@ -21,8 +22,10 @@ SPRINT_PARTITION = ["SNAPSHOT_DATE", "PROGRAM_INCREMENT"]
 # IP (Innovation & Planning) is the final sprint in a PI, so it sorts last
 IP_SPRINT_LABEL = "IP"
 IP_SPRINT_SORT_VALUE = 99
+# Anchored version at the END of SPRINT_NAME (e.g. "26.1.2" or "26.1.IP"),
+# used for the min/max sprint range; the looser SPRINT_VERSION_PATTERN from
+# shared is used for CURRENT_SPRINT.
 SPRINT_VERSION_REGEX = r"(\d{2,4}\.\d+\.(?:\d+|IP))\s*$"
-SPRINT_NAME_ALT_REGEX = r"(\d{2}\.\d.\w+)"
 
 
 def _sprint_sort_key() -> pl.Expr:
@@ -57,7 +60,7 @@ def _sort_key_to_version(col_name: str, alias: str) -> pl.Expr:
     return (major + pl.lit(".") + minor + pl.lit(".") + patch).alias(alias)
 
 
-def _compute_sprint_range(df: pl.DataFrame, partition_cols: list[str] = None) -> pl.DataFrame:
+def _compute_sprint_range(df: pl.DataFrame, partition_cols: list[str] | None = None) -> pl.DataFrame:
     """Extract sprint version from SPRINT_NAME and compute min/max per partition."""
     if partition_cols is None:
         partition_cols = SPRINT_PARTITION
@@ -98,10 +101,11 @@ def _compute_sprint_range(df: pl.DataFrame, partition_cols: list[str] = None) ->
     # Drop temp columns
     df = df.drop(["_sprint_sort_key", "_min_key", "_max_key"])
 
-    logger.info(
-        f"Sprint range: {df['MIN_SPRINT'][0]} - {df['MAX_SPRINT'][0]} "
-        f"({df.select(pl.col('SPRINT_VERSION').n_unique()).item()} unique sprints)"
-    )
+    if df.height > 0:
+        logger.info(
+            f"Sprint range: {df['MIN_SPRINT'][0]} - {df['MAX_SPRINT'][0]} "
+            f"({df.select(pl.col('SPRINT_VERSION').n_unique()).item()} unique sprints)"
+        )
 
     return df
 
@@ -114,7 +118,6 @@ def _build_sprint_lookup(df: pl.DataFrame, partition_cols: list[str]) -> pl.Data
     return lookup
 
 
-
 def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str],
                                  reference_date) -> pl.DataFrame:
     """Build a lookup of CURRENT_SPRINT per partition.
@@ -125,7 +128,7 @@ def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str],
     lookup = df.with_columns(
         pl.col("SPRINT_NAME")
         .cast(pl.Utf8)
-        .str.extract(SPRINT_NAME_ALT_REGEX)
+        .str.extract(SPRINT_VERSION_PATTERN)
         .alias("CURRENT_SPRINT")
     ).select(
         partition_cols + ["CURRENT_SPRINT", "BEGIN_DATE", "END_DATE"]
@@ -177,11 +180,11 @@ def fetch_sprint_range(config: dict) -> tuple[pl.DataFrame, pl.DataFrame, pl.Dat
     return build_sprint_lookups(df_hist, df_sum)
 
 
-def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
-                   sprint_summary_lookup: pl.DataFrame,
-                   current_sprint_hist: pl.DataFrame,
-                   current_sprint_sum: pl.DataFrame) -> pl.DataFrame:
-    """Apply all post-union transformations."""
+def apply_transforms(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
+                     sprint_summary_lookup: pl.DataFrame,
+                     current_sprint_hist: pl.DataFrame,
+                     current_sprint_sum: pl.DataFrame) -> pl.DataFrame:
+    """Apply all post-union transformations and rename for Tableau."""
     # LAST_UPDATED timestamp
     now = datetime.now()
     local_tz = now.astimezone().tzname()
@@ -218,14 +221,7 @@ def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
         pl.coalesce(["CURRENT_SPRINT", "CURRENT_SPRINT_sum"]).alias("CURRENT_SPRINT"),
     ).drop(["CURRENT_SPRINT_sum"], strict=False)
 
-    # Rename columns: SNAKE_CASE -> Title Case
-    rename_map = {
-        col: col.lower().replace("_", " ").title()
-        for col in df.columns
-    }
-    df = df.rename(rename_map)
-
-    return df
+    return rename_to_title_case(df)
 
 
 def fetch_summary_full(config: dict) -> pl.DataFrame:
@@ -301,15 +297,8 @@ def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
         pl.col("Feature Fix Version").max().alias("Max Target Release"),
     ])
 
-    # Inner join back to the split data
-    result = split.join(summary, on="Feature Key", how="inner")
-
-    # Rename columns: Title Case -> SNAKE_CASE
-    rename_map = {
-        col: col.upper().replace(" ", "_")
-        for col in result.columns
-    }
-    result = result.rename(rename_map)
+    # Inner join back to the split data; back to SNAKE_CASE for the ACRP output
+    result = rename_to_snake_case(split.join(summary, on="Feature Key", how="inner"))
 
     logger.info(f"ACRP result: {result.height} rows, {result['FEATURE_KEY'].n_unique()} features")
     return result
@@ -329,18 +318,14 @@ def run_update_cache(config: dict, force: bool = False):
     logger.info("Epics cache update complete")
 
 
-def _calc_steps(publish: bool) -> int:
-    return 11 if publish else 10
-
-
-def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
+def run(config: dict, publish: bool = False, publish_targets: list[str] | None = None,
         force: bool = False) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     cfg = config["epics"]
     cache_path = get_cache_path(cfg["cache_filename"])
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
     acrp_hyper_path = OUTPUT_DIR / cfg["acrp_hyper_filename"]
     burnup_hyper_path = OUTPUT_DIR / cfg["burnup_hyper_filename"]
-    total = _calc_steps(publish)
+    total = 11 if publish else 10  # publishing adds one step
     start = time.time()
 
     print_header("Epics Pipeline (Polars)")
@@ -392,8 +377,8 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
 
     with step_spinner(5, total, "Unioning & transforming"):
         df = union_data(df_summary, df_history)
-        df = data_functions(df, sprint_history_lookup, sprint_summary_lookup,
-                           current_sprint_hist, current_sprint_sum)
+        df = apply_transforms(df, sprint_history_lookup, sprint_summary_lookup,
+                              current_sprint_hist, current_sprint_sum)
 
     # Build ACRP before filling Snapshot Date nulls — its filter relies on the
     # null marker to identify summary rows.
@@ -421,12 +406,12 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
 
     if publish:
         with step_spinner(11, total, "Publishing to Tableau"):
-            publish_hyper(hyper_path, "Epics", config, targets=publish_targets,
-                         datasource_name=cfg["table_id"])
-            publish_hyper(acrp_hyper_path, "Epics_ACRP", config, targets=publish_targets,
-                         datasource_name=cfg["acrp_table_id"])
-            publish_hyper(burnup_hyper_path, "Feature_Burnup", config, targets=publish_targets,
-                         datasource_name=cfg["burnup_table_id"])
+            publish_hyper(hyper_path, config, targets=publish_targets,
+                          datasource_name=cfg["table_id"])
+            publish_hyper(acrp_hyper_path, config, targets=publish_targets,
+                          datasource_name=cfg["acrp_table_id"])
+            publish_hyper(burnup_hyper_path, config, targets=publish_targets,
+                          datasource_name=cfg["burnup_table_id"])
 
     elapsed = time.time() - start
     logger.info("Epics pipeline complete")

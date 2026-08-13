@@ -4,9 +4,10 @@ import polars as pl
 from common.logging import get_logger
 from schemas.datatypes import EXPECTED_DTYPES_STORIES
 from conversion.shared import (
-    OUTPUT_DIR, get_cache_path, run_query, clean_dtypes, update_history,
-    union_data, export_hyper, log_dataframe_summary, publish_hyper,
-    fill_missing_snapshots, history_fetch_plan, parallel_fetch,
+    OUTPUT_DIR, SPRINT_VERSION_PATTERN, get_cache_path, run_query, clean_dtypes,
+    update_history, union_data, export_hyper, log_dataframe_summary,
+    publish_hyper, fill_missing_snapshots, history_fetch_plan, parallel_fetch,
+    rename_to_title_case,
 )
 from conversion.console import (
     print_header, step_spinner, print_info, print_pipeline_complete,
@@ -14,12 +15,7 @@ from conversion.console import (
 
 logger = get_logger(__name__)
 
-TOTAL_STEPS_BASE = 5
-TOTAL_STEPS_PUBLISH = 6
-
-# Extracts sprint version like "26.1.IP" from sprint names like "AMMM 26.1.IP"
-SPRINT_NAME_PATTERN = r"(\d{2}\.\d.\w+)"
-# PI is the first 4 chars of the extracted version: "26.1" from "26.1.IP"
+# PI is the first 4 chars of the extracted sprint version: "26.1" from "26.1.IP"
 PI_PREFIX_LENGTH = 4
 
 
@@ -43,7 +39,8 @@ def join_stories_data(stories: pl.DataFrame, epics: pl.DataFrame) -> pl.DataFram
     )
 
 
-def data_functions(df: pl.DataFrame) -> pl.DataFrame:
+def apply_transforms(df: pl.DataFrame) -> pl.DataFrame:
+    """Add the computed columns and rename for Tableau (last step before export)."""
     now = datetime.now()
     local_tz = now.astimezone().tzname()
     logger.info(f"LAST_UPDATED set to {now} (timezone: {local_tz})")
@@ -52,7 +49,7 @@ def data_functions(df: pl.DataFrame) -> pl.DataFrame:
     df = df.with_columns([
         pl.lit(now).alias("LAST_UPDATED"),
         (pl.col("PROJECT_NAME") + " " + pl.col("FIX_VERSION")).alias("PROJECT_NAME_VERSION"),
-        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_NAME_PATTERN).alias("SPRINT_NAME_ALT"),
+        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_VERSION_PATTERN).alias("SPRINT_NAME_ALT"),
         pl.when(pl.col("SNAPSHOT_DATE").is_null())
           .then(pl.lit(now))
           .otherwise(pl.col("SNAPSHOT_DATE"))
@@ -65,14 +62,7 @@ def data_functions(df: pl.DataFrame) -> pl.DataFrame:
         pl.col("SPRINT_NAME_ALT").str.slice(0, PI_PREFIX_LENGTH).alias("PI_FROM_SPRINT")
     )
 
-    # Rename columns: SNAKE_CASE -> Title Case
-    rename_map = {
-        col: col.lower().replace("_", " ").title()
-        for col in df.columns
-    }
-    df = df.rename(rename_map)
-
-    return df
+    return rename_to_title_case(df)
 
 
 def run_update_cache(config: dict, force: bool = False):
@@ -89,12 +79,12 @@ def run_update_cache(config: dict, force: bool = False):
     logger.info("Stories cache update complete")
 
 
-def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
+def run(config: dict, publish: bool = False, publish_targets: list[str] | None = None,
         force: bool = False) -> pl.DataFrame:
     cfg = config["stories"]
     cache_path = get_cache_path(cfg["cache_filename"])
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
-    total = TOTAL_STEPS_PUBLISH if publish else TOTAL_STEPS_BASE
+    total = 6 if publish else 5  # publishing adds one step
     start = time.time()
 
     print_header("Stories Pipeline (Polars)")
@@ -129,7 +119,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
         stories = union_data(df_summary, df_history)
         epics = clean_dtypes(fetched["epics"], EXPECTED_DTYPES_STORIES)
         df = join_stories_data(stories, epics)
-        df = data_functions(df)
+        df = apply_transforms(df)
 
     log_dataframe_summary(df, "Stories Final")
 
@@ -138,8 +128,8 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
 
     if publish:
         with step_spinner(6, total, "Publishing to Tableau"):
-            publish_hyper(hyper_path, "Stories", config, targets=publish_targets,
-                         datasource_name=cfg["table_id"])
+            publish_hyper(hyper_path, config, targets=publish_targets,
+                          datasource_name=cfg["table_id"])
 
     elapsed = time.time() - start
     logger.info("Stories pipeline complete")

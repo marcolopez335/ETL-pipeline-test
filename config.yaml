@@ -1,67 +1,103 @@
+# =============================================================================
+# AMMM Jira ETL pipeline configuration
+# =============================================================================
+# Naming conventions:
+#   - snake_case   config keys and cache filenames (repo-internal)
+#   - UPPER_CASE   database column names (key_column) and .hyper outputs —
+#                  these keep their native casing because they must match what
+#                  the database returns and what Tableau workbooks reference.
+#   - sql_* values are filenames in paths.sql_dir and keep their existing
+#     names; see sql/README.md for what each query does.
+# =============================================================================
+
 database:
   name: "default"
   use_stored_credentials: true
-  parallel_fetch: true        # run independent queries concurrently (set false if the DB limits sessions)
-  max_parallel_queries: 4     # cap on concurrent ODBC connections during fetch
-  result_encoding: "cp1252"   # decode DB text as cp1252 (handles Latin-1 chars like non-breaking spaces); use "latin-1" or "utf-8" if needed
+  parallel_fetch: true          # run independent queries concurrently (set false if the DB limits sessions)
+  max_parallel_queries: 4       # cap on concurrent ODBC connections during fetch
+  result_encoding: "cp1252"     # decode DB text as cp1252 (handles Latin-1 chars like non-breaking spaces); use "latin-1" or "utf-8" if needed
 
+# Directories, relative to the project root. Logs always go to ./logs
+# (logging starts before this file is read).
 paths:
   sql_dir: "sql"
   cache_dir: "cache"
   output_dir: "output"
-  log_dir: "logs"
   backup_dir: "backups"
 
+# Timestamped copies of hyper outputs, kept before each overwrite.
 backup:
   enabled: true
   max_backups: 5
 
+# History-cache safety: back up the parquet cache before overwrite, and refuse
+# an update that would shrink it below min_retention_pct of the prior rows.
 cache:
   backup_enabled: true
   max_cache_backups: 3
   min_retention_pct: 0.98
 
+# Synthetic snapshot fill: check the last lookback_weeks snapshot days and
+# synthesize any that are missing from summary data.
 snapshots:
-  day_of_week: 0        # 0=Monday, 1=Tuesday, ..., 6=Sunday
+  day_of_week: 0                # 0=Monday, 1=Tuesday, ..., 6=Sunday
   lookback_weeks: 4
 
+# -----------------------------------------------------------------------------
+# Stories pipeline
+# -----------------------------------------------------------------------------
 stories:
+  # Tableau datasource id and output/cache files
   table_id: "AMMM.Stories.v1.py"
   hyper_filename: "STORIES.hyper"
   cache_filename: "stories_history_cache.parquet"
+  # Cache dedup key — matches the column name the SQL returns
   key_column: "STORY_NUMBER"
+  # Queries, resolved inside paths.sql_dir
+  sql_summary: "Asum.sql"
   sql_history_full: "Ahist.sql"
   sql_history_recent: "Ahist_recent.sql"
-  sql_summary: "Asum.sql"
   sql_epics: "EsumEhist.sql"
 
+# -----------------------------------------------------------------------------
+# Epics pipeline — also produces the ACRP and feature burn-up outputs
+# -----------------------------------------------------------------------------
 epics:
+  # Tableau datasource ids
   table_id: "AMMM.Epics.v1.py"
   acrp_table_id: "AMMM.Epics_ACRP.v1.py"
   burnup_table_id: "AMMM.Feature_Burnup.v1.py"
+  # Output / cache files
   hyper_filename: "EPICS.hyper"
   acrp_hyper_filename: "EPICS_ACRP.hyper"
   burnup_hyper_filename: "FEATURE_BURNUP.hyper"
-  sql_burnup: "FeatureBurnup.sql"
   cache_filename: "epics_history_cache.parquet"
+  # Cache dedup key — matches the column name the SQL returns
   key_column: "EPIC_KEY"
+  # Queries, resolved inside paths.sql_dir
+  sql_summary: "EpicSummary.sql"
   sql_history_full: "EpicHistory.sql"
   sql_history_recent: "EpicHistory_recent.sql"
-  sql_summary: "EpicSummary.sql"
   sql_agile_history: "AgileHistory.sql"
   sql_agile_summary: "AgileSummary.sql"
   sql_agile_sprint_range: "AgileSprintRange.sql"
   sql_agile_sprint_range_summary: "AgileSprintRange_summary.sql"
+  sql_burnup: "FeatureBurnup.sql"
 
+# -----------------------------------------------------------------------------
+# Tableau publish targets (--publish / --publish-tst / --publish-prd)
+# -----------------------------------------------------------------------------
+# server_key optionally selects stored credentials (like the database side's
+# use_stored_credentials); leave "" to use server_url / site_id directly.
 tableau:
   tst:
-    server_key: ""      # optional: key into stored credentials (leave "" to use url/site directly)
+    server_key: ""
     server_url: ""
     site_id: ""
     project_name: ""
     overwrite: true
   prd:
-    server_key: ""      # optional: key into stored credentials (leave "" to use url/site directly)
+    server_key: ""
     server_url: ""
     site_id: ""
     project_name: ""
