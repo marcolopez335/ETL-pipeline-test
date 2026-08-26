@@ -85,10 +85,14 @@ epics:
   sql_burnup: "FeatureBurnup.sql"
 
 # -----------------------------------------------------------------------------
-# Tableau publish targets (--publish / --publish-tst / --publish-prd)
+# Tableau publish targets
 # -----------------------------------------------------------------------------
+# --publish covers the internal servers (tst + prd); --publish-tst and
+# --publish-prd pick one. The external server publishes ONLY with
+# --publish-external — it is never included in --publish.
 # server_key optionally selects stored credentials (like the database side's
 # use_stored_credentials); leave "" to use server_url / site_id directly.
+# Targets with an empty server_url are skipped with a warning.
 tableau:
   tst:
     server_key: ""
@@ -97,6 +101,12 @@ tableau:
     project_name: ""
     overwrite: true
   prd:
+    server_key: ""
+    server_url: ""
+    site_id: ""
+    project_name: ""
+    overwrite: true
+  external:
     server_key: ""
     server_url: ""
     site_id: ""

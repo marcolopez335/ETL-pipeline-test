@@ -86,6 +86,11 @@ tableau:
     site_id: "your-site"
     project_name: "Your Project"
     overwrite: true
+  external:            # published only with --publish-external
+    server_url: "https://tableau-external.example.com"
+    site_id: "your-site"
+    project_name: "Your Project"
+    overwrite: true
 ```
 
 ## Usage
@@ -116,9 +121,10 @@ python main.py [pipeline] [action] [options]
 
 | Flag | Description |
 |------|-------------|
-| `--publish` | Publish to all configured Tableau servers (tst + prd) |
+| `--publish` | Publish to the internal Tableau servers (tst + prd) |
 | `--publish-tst` | Publish to TST only |
 | `--publish-prd` | Publish to PRD only |
+| `--publish-external` | Publish to the external Tableau server — never implied by `--publish` |
 
 **Options:**
 
@@ -150,6 +156,9 @@ python main.py --epics --query
 
 # Publish both pipelines to production
 python main.py --publish-prd
+
+# Publish to the external server (always requires the explicit flag)
+python main.py --publish-external
 ```
 
 Flags can be combined freely: `python main.py --stories --publish-tst --query`
@@ -313,6 +322,6 @@ Next run (DB has Mar 9 now):
 - **Summary statistics** — With `--verbose`, each step logs a formatted table with column dtypes, null counts/percentages, unique values, min/max, and memory usage; by default a fast one-line summary is shown
 - **Parallel fetching** — Independent SQL queries run concurrently (configurable via `database.parallel_fetch` / `database.max_parallel_queries`)
 - **Rich console output** — Color-coded progress spinners, step indicators, and formatted tables via [Rich](https://github.com/Textualize/rich)
-- **Multi-environment Tableau publishing** — Publish hyper files to TST, PRD, or all Tableau servers with `--publish`, `--publish-tst`, `--publish-prd`
+- **Multi-environment Tableau publishing** — Publish hyper files to TST and PRD with `--publish` (or one of them with `--publish-tst` / `--publish-prd`); the external server publishes only with an explicit `--publish-external`
 - **Incremental updates** — Only recent history is fetched and merged on subsequent runs, with a safety check preventing cache shrinkage beyond a configurable threshold (default: 2%)
 - **Memory-efficient pipeline** — Intermediate DataFrames are freed eagerly, stats are computed once and shared across logger and console display

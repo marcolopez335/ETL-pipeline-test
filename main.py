@@ -56,23 +56,22 @@ def _load_tables_from_cache(config: dict, load_stories: bool, load_epics: bool) 
     return tables
 
 
-def _resolve_publish_targets(args) -> tuple[bool, list[str] | None]:
+def _resolve_publish_targets(args) -> tuple[bool, list[str]]:
     """Decide whether to publish and to which servers.
 
-    Returns ``(do_publish, targets_or_none)``. ``None`` means "publish to all
-    configured servers"; otherwise it's an explicit subset like ``["tst"]``.
+    Returns ``(do_publish, targets)``. ``--publish`` covers the internal
+    servers (tst + prd). The external server is never implied — it publishes
+    only when ``--publish-external`` is passed explicitly, so a routine
+    ``--publish`` can't accidentally push data to an external audience.
     """
-    do_publish = args.publish or args.publish_tst or args.publish_prd
-    if not do_publish:
-        return False, None
-    if args.publish:
-        return True, None
     targets: list[str] = []
-    if args.publish_tst:
+    if args.publish or args.publish_tst:
         targets.append("tst")
-    if args.publish_prd:
+    if args.publish or args.publish_prd:
         targets.append("prd")
-    return True, targets
+    if args.publish_external:
+        targets.append("external")
+    return bool(targets), targets
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -83,11 +82,15 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Update history caches only (no hyper export)")
     parser.add_argument("--test", action="store_true", help="Test the database connection")
     parser.add_argument("--publish", action="store_true",
-                        help="Publish hyper files to all Tableau servers (tst + prd)")
+                        help="Publish hyper files to the internal Tableau servers (tst + prd); "
+                             "the external server needs --publish-external")
     parser.add_argument("--publish-tst", action="store_true",
                         help="Publish hyper files to Tableau TST only")
     parser.add_argument("--publish-prd", action="store_true",
                         help="Publish hyper files to Tableau PRD only")
+    parser.add_argument("--publish-external", action="store_true",
+                        help="Publish hyper files to the external Tableau server "
+                             "(config key: tableau.external)")
     parser.add_argument("--force", action="store_true",
                         help="Bypass cache shrinkage safety check")
     parser.add_argument("--query", action="store_true",
