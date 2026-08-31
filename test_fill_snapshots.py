@@ -279,6 +279,76 @@ def test_prompt_guard_and_spinner_pause() -> None:
     check("guard: spinner_paused() no-ops cleanly without a spinner", True)
 
 
+def test_drop_todays_history_prevents_double_count() -> None:
+    """Regression: on snapshot days the history table already has rows dated
+    today; the summary rows (null SNAPSHOT_DATE, later filled with today's
+    date) then doubled every story on the latest date in STORIES.hyper."""
+    from conversion.stories_table import (
+        apply_transforms, drop_todays_history, join_stories_data,
+    )
+    from conversion.shared import union_data
+
+    today = datetime.now().date()
+    prior_snap = today - timedelta(days=14)
+
+    summary = pl.DataFrame({
+        "STORY_NUMBER": ["S-1", "S-2"],
+        "PROJECT_NAME": ["AMMM"] * 2,
+        "SPRINT_NAME": ["AMMM 26.1.2"] * 2,
+        "FIX_VERSION": ["R26.2"] * 2,
+        "STATUS": ["Done", "In Progress"],           # live state at run time
+        "SNAPSHOT_DATE": pl.Series([None, None], dtype=pl.Datetime("us")),
+        "LAST_UPDATED": [datetime.now()] * 2,
+        "FEATURE_ID": ["F-1"] * 2,
+    })
+    history = pl.DataFrame({
+        "STORY_NUMBER": ["S-1", "S-2", "S-1", "S-2"],
+        "PROJECT_NAME": ["AMMM"] * 4,
+        "SPRINT_NAME": ["AMMM 26.1.2"] * 4,
+        "FIX_VERSION": ["R26.2"] * 4,
+        "STATUS": ["In Progress"] * 4,               # morning-snapshot state
+        "SNAPSHOT_DATE": [prior_snap, prior_snap, today, today],
+        "LAST_UPDATED": pl.Series([None] * 4, dtype=pl.Datetime("us")),
+        "FEATURE_ID": ["F-1"] * 4,
+    }).with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date))
+
+    kept = drop_todays_history(history)
+    check("drop: today's history rows removed, prior snapshot kept",
+          kept.height == 2
+          and kept["SNAPSHOT_DATE"].unique().to_list() == [prior_snap],
+          detail=f"kept={kept.height}")
+
+    # Null snapshot dates should not exist in history, but must never be
+    # swallowed by the filter (ne_missing keeps them)
+    with_null = history.vstack(history.head(1).with_columns(
+        pl.lit(None).cast(pl.Date).alias("SNAPSHOT_DATE")))
+    check("drop: null snapshot dates are kept, not dropped",
+          drop_todays_history(with_null).height == 3)
+
+    epics_lookup = pl.DataFrame({
+        "FEATURE_ID": ["F-1", "F-1"],
+        "SNAPSHOT_DATE": pl.Series(
+            [None, datetime(prior_snap.year, prior_snap.month, prior_snap.day)],
+            dtype=pl.Datetime("us")),
+        "FEATURE_STATUS": ["Committed"] * 2,
+    })
+
+    df = apply_transforms(join_stories_data(union_data(summary, kept), epics_lookup))
+
+    latest = df.filter(pl.col("Snapshot Date").cast(pl.Date) == today)
+    check("no double count: one row per story on the latest date",
+          latest.height == 2 and latest["Story Number"].n_unique() == 2,
+          detail=f"rows={latest.height}")
+    check("today's rows come from the live summary (S-1 is Done)",
+          latest.filter(pl.col("Story Number") == "S-1")["Status"].item() == "Done")
+
+    prior = df.filter(pl.col("Snapshot Date").cast(pl.Date) == prior_snap)
+    check("prior snapshot untouched", prior.height == 2,
+          detail=f"rows={prior.height}")
+    check("feature attributes joined on the prior snapshot",
+          prior["Feature Status"].null_count() == 0)
+
+
 def test_decode_sql_text_tolerates_windows_bytes() -> None:
     # Plain UTF-8 passes through unchanged
     check("decode: clean utf-8 unchanged",
@@ -335,6 +405,7 @@ def test_configure_result_encoding_is_safe() -> None:
 
 def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
+    test_drop_todays_history_prevents_double_count()
     test_decode_sql_text_tolerates_windows_bytes()
     test_configure_result_encoding_is_safe()
     test_supertype_rules()

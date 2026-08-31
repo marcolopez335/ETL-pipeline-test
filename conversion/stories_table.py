@@ -1,13 +1,14 @@
 import time
 from datetime import datetime
 import polars as pl
-from common.logging import get_logger
 from schemas.datatypes import EXPECTED_DTYPES_STORIES
+# get_logger comes via shared so this module stays importable (and testable)
+# without the proprietary `common` package, like burnup_table
 from conversion.shared import (
-    OUTPUT_DIR, SPRINT_VERSION_PATTERN, get_cache_path, run_query, clean_dtypes,
-    update_history, union_data, export_hyper, log_dataframe_summary,
-    publish_hyper, fill_missing_snapshots, history_fetch_plan, parallel_fetch,
-    rename_to_title_case,
+    OUTPUT_DIR, SPRINT_VERSION_PATTERN, get_cache_path, get_logger, run_query,
+    clean_dtypes, update_history, union_data, export_hyper,
+    log_dataframe_summary, publish_hyper, fill_missing_snapshots,
+    history_fetch_plan, parallel_fetch, rename_to_title_case,
 )
 from conversion.console import (
     print_header, step_spinner, print_info, print_pipeline_complete,
@@ -37,6 +38,31 @@ def join_stories_data(stories: pl.DataFrame, epics: pl.DataFrame) -> pl.DataFram
         suffix="_epics",
         join_nulls=True,
     )
+
+
+def drop_todays_history(df_history: pl.DataFrame) -> pl.DataFrame:
+    """Drop history rows snapshotted today — the summary owns today's data.
+
+    On snapshot days the history table already contains rows dated today.
+    The summary rows (null SNAPSHOT_DATE, filled with today's date in
+    apply_transforms) would then duplicate every story on the latest date,
+    doubling counts in Tableau. The summary is fetched at run time, so it is
+    the fresher version of today; keep it and drop the morning snapshot from
+    the export. The cache is unaffected — update_history has already stored
+    today's snapshot, and tomorrow's export serves today from history as
+    usual.
+    """
+    today = datetime.now().date()
+    before = df_history.height
+    df_history = df_history.filter(
+        pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False).ne_missing(today)
+    )
+    dropped = before - df_history.height
+    if dropped:
+        logger.info(
+            f"Dropped {dropped} history rows dated {today} — summary supplies today's rows"
+        )
+    return df_history
 
 
 def apply_transforms(df: pl.DataFrame) -> pl.DataFrame:
@@ -116,6 +142,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] | None =
         df_history = fill_missing_snapshots(df_summary, df_history, cfg["key_column"], config=config)
 
     with step_spinner(4, total, "Joining & transforming"):
+        df_history = drop_todays_history(df_history)
         stories = union_data(df_summary, df_history)
         epics = clean_dtypes(fetched["epics"], EXPECTED_DTYPES_STORIES)
         df = join_stories_data(stories, epics)
