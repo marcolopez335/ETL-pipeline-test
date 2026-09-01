@@ -20,9 +20,9 @@ lint:
     - ruff check . --select E,F,W --ignore E501
   allow_failure: false
 
-test:fill-snapshots:
+test:
   stage: test
   before_script:
-    - pip install polars rich pyyaml
+    - pip install polars rich pyyaml pytest
   script:
-    - python test_fill_snapshots.py
+    - pytest

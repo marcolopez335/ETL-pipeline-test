@@ -10,11 +10,13 @@ A production ETL pipeline that extracts Jira backlog data from a Tibco database 
 - [Setup](#setup)
 - [Configuration](#configuration)
 - [Usage](#usage)
+- [Data Model](#data-model)
 - [Pipelines](#pipelines)
 - [Interactive SQL Query Mode](#interactive-sql-query-mode)
 - [Dashboard Mockup](#dashboard-mockup)
 - [Synthetic Snapshots](#synthetic-snapshots)
 - [Architecture](#architecture)
+- [Testing](#testing)
 - [Features](#features)
 
 ---
@@ -24,20 +26,23 @@ A production ETL pipeline that extracts Jira backlog data from a Tibco database 
 ```
 ETL-pipeline-test/
 ├── main.py                              # CLI entry point
-├── config.yaml                          # Configuration (database, Tableau, paths)
+├── config.yaml                          # Configuration (database, Tableau, paths, SQL file names)
+├── CLAUDE.md                            # Project brief: data model, conventions, definition of done
 ├── requirements.txt                     # Python dependencies
 ├── conversion/
-│   ├── shared.py                        # Shared utilities (query, cache, export, snapshots)
+│   ├── shared.py                        # Shared utilities (config, query, cache, snapshots, export, publish)
 │   ├── console.py                       # Rich console output (progress, tables)
 │   ├── stories_table.py                 # Stories pipeline
-│   └── epics_table.py                   # Epics pipeline + ACRP + sprint range
+│   ├── epics_table.py                   # Epics pipeline + ACRP + sprint range
+│   └── burnup_table.py                  # Feature burn-up output
 ├── sql_shell/                           # Standalone interactive SQL shell (reusable)
 │   ├── __init__.py
 │   ├── __main__.py                      # CLI: python -m sql_shell data.parquet
 │   ├── shell.py                         # REPL loop, command parsing
 │   └── display.py                       # Rich table rendering
 ├── sql/                                 # SQL query files (CTE hierarchy)
-├── schemas/                             # Column dtype definitions
+├── schemas/                             # Column dtype definitions (checked against the SQL by tests)
+├── tests/                               # pytest suite -- runs without the database or csm_commonlib
 ├── dashboard/                           # Tableau-style dashboard mockup on mock STORIES data
 │   ├── index.html                       # Self-contained dashboard (filters, KPIs, burn-up, grid)
 │   ├── generate_mock_data.py            # Deterministic mock data generator (stdlib only)
@@ -56,7 +61,7 @@ python -m venv .odbcenv
 pip install -r requirements.txt
 ```
 
-> Requires the internal `common` package for database connectivity, logging, and Tableau publishing.
+> Requires the internal `csm_commonlib` package (`csm_commonlib.database.tibco`, `csm_commonlib.logging`, `csm_commonlib.tableau`) for database connectivity, logging, and Tableau publishing. The build and test code runs without it — see [Testing](#testing).
 
 ## Configuration
 
@@ -168,29 +173,56 @@ python main.py --publish-external
 
 Flags can be combined freely: `python main.py --stories --publish-tst --query`
 
+## Data Model
+
+Both pipelines have the same shape: a **summary** query (the live state — `SNAPSHOT_DATE` is NULL) unioned with a cached **history** of weekly snapshots, then joined to the level above it.
+
+```
+STORIES  =  (story history ∪ story summary)
+            ⟕ (feature history ∪ feature summary)        on FEATURE_ID + SNAPSHOT_DATE
+
+EPICS    =  (epic history ∪ epic summary)                 one row per Epic, with the hierarchy
+            ⟕ agile rollups  (points per feature + PI)    above it flattened on: Feature →
+            ⟕ sprint lookups (min / max / current sprint) Sub-Capability → Customer Capability → Customer Epic
+```
+
+| Output | Grain | Columns | Built by |
+|--------|-------|---------|----------|
+| `STORIES.hyper` | story × snapshot | Title Case | `stories_table.build_stories()` |
+| `EPICS.hyper` | epic × program increment × snapshot | Title Case | `epics_table.build_epics()` |
+| `EPICS_ACRP.hyper` | feature fix version (summary rows only) | SCREAMING_SNAKE_CASE | `epics_table.build_acrp()` |
+| `FEATURE_BURNUP.hyper` | feature × date event | SCREAMING_SNAKE_CASE | `burnup_table.build_burnup()` |
+
+Rules that hold everywhere:
+
+- **The summary owns today.** History rows dated today are dropped before the union and the summary rows are stamped with today's date, so nothing is double-counted on snapshot days. The cache still stores the official snapshot; tomorrow's export serves today from history.
+- **`SNAPSHOT_DATE` is the time axis.** NULL means "live" until the final stamp. It is a timestamp in `STORIES.hyper` and a date in `EPICS.hyper` — the types the workbooks were built on.
+- **Casing.** SCREAMING_SNAKE_CASE from the database through the build; Title Case only at export. The `build_*` functions are pure DataFrame → DataFrame and are what the tests exercise.
+
 ## Pipelines
 
 ### Stories
 
-1. Fetch summary data and history snapshots from Tibco
-2. Update incremental history cache
-3. Fill missing Monday snapshots (synthetic)
-4. Drop history rows dated today — the live summary supplies today's rows, so stories aren't double-counted on snapshot days (the cache still keeps the official snapshot)
-5. Union summary with history, fetch and join epics lookup
-6. Apply transformations (`LAST_UPDATED`, `PROJECT_NAME_VERSION`, `SPRINT_NAME_ALT`, `SNAPSHOT_DATE_ALT`, `PI_FROM_SPRINT`, column renaming)
+1. Fetch the story summary, story history and feature lookup from Tibco (in parallel)
+2. Update the incremental history cache
+3. Fill missing weekly snapshots (synthetic)
+4. Drop history rows dated today — the live summary supplies today's rows (the cache still keeps the official snapshot)
+5. Union summary with history and join the feature lookup on `FEATURE_ID` + `SNAPSHOT_DATE`
+6. Apply transformations (`LAST_UPDATED`, `PROJECT_NAME_VERSION`, `SPRINT_NAME_ALT`, `SNAPSHOT_DATE_ALT`, `PI_FROM_SPRINT`) and rename to Title Case
 7. Export to `STORIES.hyper`
 8. Optionally publish to Tableau Server
 
 ### Epics
 
-1. Fetch summary data and history snapshots from Tibco
-2. Update incremental history cache
-3. Fill missing Monday snapshots (synthetic)
-4. Union summary with history, apply transformations (`LAST_UPDATED`, sprint parsing, `MIN_SPRINT`/`MAX_SPRINT`)
-5. Export to `EPICS.hyper`
-6. Build ACRP release range view and export to `EPICS_ACRP.hyper`
-7. Build feature burn-up view and export to `FEATURE_BURNUP.hyper`
-8. Optionally publish all hyper files to Tableau Server
+1. Fetch the epic summary, epic history, agile rollups, sprint ranges and burn-up source from Tibco (in parallel)
+2. Update the incremental history cache
+3. Fill missing weekly snapshots (synthetic)
+4. Drop history rows dated today (same rule as stories); join the agile rollups onto history (`FEATURE_KEY` + `SNAPSHOT_DATE`) and onto summary (`FEATURE_KEY`)
+5. Union summary with history, apply transformations (`LAST_UPDATED`, `SNAPSHOT_DATE_ALT`, `MIN_SPRINT` / `MAX_SPRINT`, `CURRENT_SPRINT`)
+6. Build the ACRP release range view from the summary rows, then stamp summary rows with today's `SNAPSHOT_DATE` and rename to Title Case
+7. Build the feature burn-up view
+8. Export `EPICS.hyper`, `EPICS_ACRP.hyper` and `FEATURE_BURNUP.hyper`
+9. Optionally publish all hyper files to Tableau Server
 
 ### Feature Burn-Up
 
@@ -204,7 +236,7 @@ A long-format date-event dataset built from `FeatureBurnup.sql` (Feature rows of
 
 ### ACRP (Active Capability Release Plan)
 
-A derived view from epics data that maps features and sub-capabilities to their target release ranges:
+A derived view from epics data that maps features and sub-capabilities to their target release ranges. Built from the transformed frame *before* the `SNAPSHOT_DATE` fill, so it holds the live summary rows only:
 
 1. Filters rows where `SNAPSHOT_DATE` is null and `FEATURE_KEY` or `SUBCAPABILITY_KEY` is not null
 2. Splits comma-delimited `FEATURE_FIX_VERSION` into individual rows
@@ -302,30 +334,42 @@ Next run (DB has Mar 9 now):
 ## Architecture
 
 ```
-   Tibco DB ──ODBC──> run_query() ──> pl.DataFrame
+   Tibco DB ──ODBC──> run_query() ──> pl.DataFrame ──> clean_dtypes()
                                           │
-                          ┌───────────────┤
-                          │               │
-                    summary data    history cache
-                          │          (scan_parquet)
-                          │               │
-                          │    fill_missing_snapshots()
-                          │     (synthesize missing Mondays)
-                          │               │
-                          └──── union ────┘
+                          ┌───────────────┼───────────────┐
+                          │               │               │
+                    summary data    history cache      lookups
+                          │          (scan_parquet)    (features / agile / sprints)
+                          │               │               │
+                          │    fill_missing_snapshots()   │
+                          │    drop_todays_history()      │
+                          │               │               │
+                          └──── union ────┴──── join ─────┘
                                   │
-                           apply_transforms()
-                            (computed cols)
+                      build_stories() / build_epics()
+                     (transforms, ACRP, Title Case rename)
                                   │
                         ┌─────────┴─────────┐
                         │                   │
-                   export_hyper()      build_acrp()
+                   export_hyper()      build_burnup()
                    (Arrow → pantab)         │
                         │              export_hyper()
                         │                   │
                    publish_hyper()    publish_hyper()
-                  (tst / prd)        (tst / prd)
+               (tst / prd / external) (tst / prd / external)
 ```
+
+## Testing
+
+The build chains (`build_stories`, `build_epics`, `build_acrp`, `build_burnup`) and the shared helpers are pure Polars, so the suite runs without the database or `csm_commonlib`:
+
+```bash
+pip install pytest
+pytest                                          # tests/ — in-memory frames through the real union / join / transform code
+ruff check . --select E,F,W --ignore E501       # lint, same command as CI
+```
+
+`tests/test_schemas.py` parses each query's select list and fails if `schemas/datatypes.py` names a column no query returns, so a renamed SQL column can't silently lose its cast. CI (`.gitlab-ci.yml`) runs both commands.
 
 ## Features
 

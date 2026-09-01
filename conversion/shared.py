@@ -1,16 +1,18 @@
+import inspect
 import shutil
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
 import yaml
 
-# common.* and the rich-driven console module are imported lazily so this
-# module can be imported (and its pure-Polars helpers tested) without the
-# proprietary `common` package or the rich runtime.
+# csm_commonlib.* is imported lazily, inside the functions that need it, so
+# this module can be imported -- and its pure-Polars helpers tested -- without
+# the proprietary `csm_commonlib` package. get_logger falls back to stdlib
+# logging for the same reason; the pipeline modules import it from here.
 try:
-    from common.logging import get_logger
+    from csm_commonlib.logging import get_logger
 except ImportError:  # pragma: no cover — fallback for unit-test environments
     import logging
     def get_logger(name: str) -> logging.Logger:
@@ -24,6 +26,14 @@ from conversion.console import (
 )
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+
+# Polars renamed DataFrame.join(join_nulls=...) to nulls_equal= in 1.24.
+# Resolved once so null-matching joins work on either side of the rename.
+JOIN_NULLS_KWARG = (
+    {"nulls_equal": True}
+    if "nulls_equal" in inspect.signature(pl.DataFrame.join).parameters
+    else {"join_nulls": True}
+)
 
 # Default locations — override via config.yaml `paths:` section.
 SQL_DIR = ROOT_DIR / "sql"
@@ -177,7 +187,7 @@ def run_query(
     sql_filename: str, database: str = "default", verbose: bool = True,
     config: dict | None = None,
 ) -> pl.DataFrame:
-    from common.database.tibco import TibcoConnection
+    from csm_commonlib.database.tibco import TibcoConnection
     logger.info(f"Running query: {sql_filename}")
     query = load_sql(sql_filename)
     conn = TibcoConnection()
@@ -214,7 +224,7 @@ def run_query(
 
 
 def test_connection(database: str = "default", config: dict | None = None) -> bool:
-    from common.database.tibco import TibcoConnection
+    from csm_commonlib.database.tibco import TibcoConnection
     logger.info("Testing database connection")
     conn = TibcoConnection()
     try:
@@ -235,17 +245,37 @@ def test_connection(database: str = "default", config: dict | None = None) -> bo
 # ---------------------------------------------------------------------------
 
 def clean_dtypes(df: pl.DataFrame, schema: dict) -> pl.DataFrame:
+    """Cast columns to the dtypes declared in a ``schemas.datatypes`` mapping.
+
+    ``schema`` maps column name -> ``"datetime" | "date" | "float" | "string"``.
+    Columns missing from ``df`` are skipped, so one mapping can describe every
+    query a pipeline runs. Casts are non-strict: values that cannot be
+    converted become null rather than raising.
+
+    The ODBC driver normally returns real datetimes; a string-typed date
+    column is parsed with format inference (the String -> Datetime cast is
+    deprecated in Polars and only accepts ISO "T" timestamps anyway).
+    """
     casts = []
     for col, dtype in schema.items():
         if col not in df.columns:
             continue
+        expr = pl.col(col)
 
-        if dtype == "datetime":
-            casts.append(pl.col(col).cast(pl.Datetime, strict=False))
+        if dtype in ("datetime", "date"):
+            if df.schema[col] == pl.Utf8:
+                expr = expr.str.to_datetime(strict=False)
+            target = pl.Datetime("us") if dtype == "datetime" else pl.Date
+            casts.append(expr.cast(target, strict=False))
         elif dtype == "float":
-            casts.append(pl.col(col).cast(pl.Float64, strict=False))
+            casts.append(expr.cast(pl.Float64, strict=False))
         elif dtype == "string":
-            casts.append(pl.col(col).cast(pl.Utf8, strict=False).str.strip_chars())
+            casts.append(expr.cast(pl.Utf8, strict=False).str.strip_chars())
+        else:
+            raise ValueError(
+                f"Unknown dtype '{dtype}' for column {col} -- "
+                f"expected datetime, date, float or string"
+            )
 
     if casts:
         df = df.with_columns(casts)
@@ -656,9 +686,40 @@ def fill_missing_snapshots(
 
 
 def union_data(df_summary: pl.DataFrame, df_history: pl.DataFrame) -> pl.DataFrame:
+    """Stack the live summary (NULL SNAPSHOT_DATE) on top of history, deduplicated.
+
+    Column order follows the summary; columns only one side has are added
+    as nulls to the other (see ``_align_schemas``).
+    """
     df_summary, df_history = _align_schemas(df_summary, df_history)
     unioned = pl.concat([df_summary, df_history])
     return unioned.unique()
+
+
+def drop_todays_history(df_history: pl.DataFrame, today: date | None = None) -> pl.DataFrame:
+    """Drop history rows snapshotted today -- the summary owns today's data.
+
+    On snapshot days the history table already contains rows dated today.
+    The summary rows (NULL SNAPSHOT_DATE, stamped with today's date by the
+    pipeline's transforms) would then duplicate every key on the latest
+    date, doubling counts in Tableau. The summary is fetched at run time,
+    so it is the fresher version of today: keep it and drop the morning
+    snapshot from the export.
+
+    The cache is unaffected: update_history has already stored today's
+    snapshot, and tomorrow's export serves today from history as usual.
+    NULL snapshot dates are never dropped (ne_missing).
+    """
+    if today is None:
+        today = datetime.now().date()
+    before = df_history.height
+    kept = df_history.filter(
+        pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False).ne_missing(today)
+    )
+    dropped = before - kept.height
+    if dropped:
+        logger.info(f"Dropped {dropped} history rows dated {today} -- summary supplies today's rows")
+    return kept
 
 
 # ---------------------------------------------------------------------------
@@ -722,14 +783,15 @@ def publish_hyper(hyper_path: Path, config: dict,
                  If None, publishes to all configured servers.
         datasource_name: Name of the datasource on Tableau Server.
     """
-    from common.tableau.publish import publish_hyper_to_tableau
+    from csm_commonlib.tableau.publish import publish_hyper_to_tableau
     # tableau_session is a context manager that signs in, yields a connected
-    # TSC.Server, and signs out on exit. Import path may differ across common
-    # versions — try the dedicated session module, then the publish module.
+    # TSC.Server, and signs out on exit. Import path may differ across
+    # csm_commonlib versions -- try the dedicated session module, then the
+    # publish module.
     try:
-        from common.tableau.session import tableau_session
+        from csm_commonlib.tableau.session import tableau_session
     except ImportError:
-        from common.tableau.publish import tableau_session
+        from csm_commonlib.tableau.publish import tableau_session
 
     tab_cfg = config["tableau"]
 

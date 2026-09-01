@@ -201,7 +201,7 @@ def build_dataset(seed: int) -> dict:
     rng = random.Random(seed)
 
     # Stable people per team so assignees repeat believably.
-    names = [f"{f} {l}" for f, l in zip(rng.sample(FIRST, 24), rng.sample(LAST, 20) + rng.sample(LAST, 4))]
+    names = [f"{first} {last}" for first, last in zip(rng.sample(FIRST, 24), rng.sample(LAST, 20) + rng.sample(LAST, 4))]
     rng.shuffle(names)
     roster: dict[str, list[str]] = {}
     i = 0

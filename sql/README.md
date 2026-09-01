@@ -16,15 +16,15 @@ Filenames are legacy and abbreviated in places (`A*` = agile/story data,
 ## Files
 
 ### Stories pipeline
-- `Asum.sql` — Current stories snapshot
-- `Ahist.sql` — Full story snapshot history
-- `Ahist_recent.sql` — Recent story snapshots
-- `EsumEhist.sql` — Epic/feature attributes joined onto stories
+- `Asum.sql` — Current stories (`sql_summary`); `NULL AS SNAPSHOT_DATE` marks the rows as live
+- `Ahist.sql` — Story snapshot history for the last 12 months (`WHERE SNAPSHOT_DATE >= DATEADD('yyyy',-1, CURRENT_TIMESTAMP)`); seeds the cache (`sql_history_full`)
+- `Ahist_recent.sql` — Last 30 days of story snapshots, merged into the cache on every run (`sql_history_recent`)
+- `EsumEhist.sql` — Feature summary `UNION ALL` feature history, joined onto stories on `FEATURE_ID` + `SNAPSHOT_DATE` (`sql_features`)
 
 ### Epics pipeline
-- `EpicSummary.sql` — Current epics summary (CTE hierarchy)
-- `EpicHistory.sql` — Full epic snapshot history
-- `EpicHistory_recent.sql` — Recent epic snapshots
+- `EpicSummary.sql` — Current epic hierarchy (CTE per level, flattened onto the epic row; `sql_summary`)
+- `EpicHistory.sql` — Full epic snapshot history, no date window; seeds the cache (`sql_history_full`)
+- `EpicHistory_recent.sql` — Last 30 days of epic snapshots (`sql_history_recent`)
 - `AgileHistory.sql` — Story-point rollups per feature and snapshot
 - `AgileSummary.sql` — Story-point rollups per feature (current)
 - `AgileSprintRange.sql` — Sprint names and dates per snapshot/PI
@@ -33,8 +33,9 @@ Filenames are legacy and abbreviated in places (`A*` = agile/story data,
 
 ## Notes
 
-- Filenames are referenced in `config.yaml` under each pipeline's section (`sql_summary`, `sql_history_full`, `sql_history_recent`, etc.) — the code never hardcodes them
-- History queries must return a `SNAPSHOT_DATE` column and the pipeline's key column (e.g., `STORY_NUMBER`, `EPIC_KEY`)
+- Filenames are referenced in `config.yaml` under each pipeline's section (`sql_summary`, `sql_history_full`, `sql_history_recent`, `sql_features`, `sql_agile_*`, `sql_burnup`) — the code never hardcodes them
+- History queries must return a `SNAPSHOT_DATE` column and the pipeline's key column (`STORY_NUMBER`, `EPIC_KEY`)
+- A pipeline's summary and history queries return the same select list (the stories summary selects `NULL AS SNAPSHOT_DATE`; the epic history adds `SNAPSHOT_DATE`) — `tests/test_schemas.py` enforces this and checks `schemas/datatypes.py` against the column names here, so alias every computed column
 - Column names are SCREAMING_SNAKE_CASE because that is what the Tibco database returns
 - The epic SQL uses a CTE hierarchy: epic -> feature -> subcapability -> customercapability -> customerepic
 - `ORDER BY` clauses in these queries do not affect pipeline logic — they are for manual inspection only

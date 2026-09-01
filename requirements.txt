@@ -8,6 +8,6 @@ pyyaml>=6.0
 rich>=13.0
 pandas>=2.0           # Required by run_query (TibcoConnection.execute_query returns pandas)
 
-# Internal package — provides common.database.tibco, common.logging,
-# and common.tableau.publish. Install from the internal index/wheel.
-# common>=X.Y
+# Internal package — provides csm_commonlib.database.tibco, csm_commonlib.logging
+# and csm_commonlib.tableau.publish. Install from the internal index/wheel.
+# csm_commonlib>=X.Y
