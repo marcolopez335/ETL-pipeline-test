@@ -97,38 +97,6 @@ def _use_stored_credentials(config: dict | None) -> bool:
     return bool(config.get("database", {}).get("use_stored_credentials", True))
 
 
-def _configure_result_encoding(conn, config: dict | None) -> None:
-    """Tell the ODBC connection how to decode result text.
-
-    Tibco CHAR/VARCHAR columns come back as cp1252/Latin-1, but pyodbc
-    defaults to strict UTF-8. Pure-ASCII data decodes identically under
-    both, so it works until a non-ASCII byte (e.g. 0xa0 non-breaking space
-    pasted into a Jira field) appears — then fetchall() raises
-    UnicodeDecodeError. Configuring setdecoding fixes it for all values.
-
-    Safe no-op when the underlying connection isn't exposed, isn't a pyodbc
-    connection, or pyodbc isn't importable (e.g. unit-test environments).
-    Override the encoding via ``database.result_encoding`` in config.yaml.
-    """
-    encoding = (config or {}).get("database", {}).get("result_encoding", "cp1252")
-
-    raw = getattr(conn, "connection", None)
-    if raw is None:
-        logger.info("Connection not exposed for decoding config; using driver default")
-        return
-    setdecoding = getattr(raw, "setdecoding", None)
-    if setdecoding is None:
-        return  # not a pyodbc connection — nothing to configure
-
-    try:
-        import pyodbc
-        setdecoding(pyodbc.SQL_CHAR, encoding=encoding)
-        setdecoding(pyodbc.SQL_WCHAR, encoding=encoding)
-        logger.info(f"Result text decoding set to '{encoding}'")
-    except Exception as exc:
-        logger.warning(f"Could not configure result decoding ({encoding}): {exc}")
-
-
 def parallel_fetch(jobs: dict, config: dict | None = None) -> dict:
     """Run independent fetch callables concurrently and return results by key.
 
@@ -151,36 +119,12 @@ def parallel_fetch(jobs: dict, config: dict | None = None) -> dict:
         return {key: fut.result() for key, fut in futures.items()}
 
 
-def _decode_sql_text(raw: bytes, label: str = "SQL") -> str:
-    """Decode SQL bytes, tolerating Windows-edited files.
-
-    SQL files edited on Windows (paste from a browser/Excel/Word) often
-    pick up a raw 0xa0 non-breaking space or other cp1252 bytes, which
-    break a strict UTF-8 read. Strip a UTF-8 BOM, fall back to cp1252 on
-    a decode error, and normalize non-breaking spaces to plain spaces so
-    the query parses regardless of how it was saved.
-    """
-    if raw.startswith(b"\xef\xbb\xbf"):  # UTF-8 BOM
-        raw = raw[3:]
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        logger.warning(
-            f"{label}: not valid UTF-8 ({exc}); decoding as cp1252 and "
-            f"normalizing non-breaking spaces"
-        )
-        text = raw.decode("cp1252")
-    # Normalize non-breaking spaces (U+00A0) to regular spaces — in SQL they
-    # are almost always an accidental whitespace char that should be a space.
-    return text.replace("\u00a0", " ")
-
-
 def load_sql(filename: str) -> str:
     sql_path = SQL_DIR / filename
     if not sql_path.is_file():
         raise FileNotFoundError(f"SQL file not found: {sql_path}")
 
-    return _decode_sql_text(sql_path.read_bytes(), label=filename)
+    return sql_path.read_text(encoding="utf-8")
 
 
 def run_query(
@@ -192,9 +136,6 @@ def run_query(
     query = load_sql(sql_filename)
     conn = TibcoConnection()
     conn.connect(database=database, use_stored_credentials=_use_stored_credentials(config))
-    # Decode Latin-1/cp1252 result text (e.g. non-breaking spaces in Jira
-    # fields) so fetchall() doesn't crash on the driver's strict UTF-8 default
-    _configure_result_encoding(conn, config)
 
     try:
         pdf = conn.execute_query(query, verbose=verbose)

@@ -4,12 +4,12 @@ Expected column dtypes applied by `conversion.shared.clean_dtypes()` right after
 
 ## Mappings
 
-| Mapping | Queries it describes | Used by |
-|---------|----------------------|---------|
-| `EXPECTED_DTYPES_STORIES` | `Asum.sql`, `Ahist.sql`, `Ahist_recent.sql` | stories summary + history |
-| `EXPECTED_DTYPES_FEATURES` | `EsumEhist.sql` | stories feature lookup |
-| `EXPECTED_DTYPES_EPICS` | `EpicSummary.sql`, `EpicHistory.sql`, `EpicHistory_recent.sql` | epics summary + history |
-| `EXPECTED_DTYPES_AGILE` | `AgileHistory.sql`, `AgileSummary.sql`, `AgileSprintRange.sql`, `AgileSprintRange_summary.sql` | epics agile rollups + sprint ranges |
+One mapping per pipeline, covering every query that pipeline runs (columns a query does not return are skipped):
+
+| Mapping | Queries it describes |
+|---------|----------------------|
+| `EXPECTED_DTYPES_STORIES` | `Asum.sql`, `Ahist.sql`, `Ahist_recent.sql` (stories) and `EsumEhist.sql` (feature lookup) |
+| `EXPECTED_DTYPES_EPICS` | `EpicSummary.sql`, `EpicHistory.sql`, `EpicHistory_recent.sql` (epic hierarchy), `AgileHistory.sql`, `AgileSummary.sql` (rollups) and `AgileSprintRange*.sql` (sprint ranges) |
 
 ## Types
 
@@ -23,7 +23,7 @@ Expected column dtypes applied by `conversion.shared.clean_dtypes()` right after
 ## Rules
 
 - Keys must match the SQL output names exactly (SCREAMING_SNAKE_CASE, as Tibco returns them). `tests/test_schemas.py` parses the SQL select lists and fails on any key no query returns.
-- Columns not present in a DataFrame are skipped, so one mapping covers a pipeline's summary, full-history and recent-history queries.
+- Columns not present in a DataFrame are skipped, so one mapping covers every query a pipeline runs: summary, history and its lookups.
 - Casts are non-strict: unconvertible values become null rather than raising.
 - Join keys must agree on both sides: `SNAPSHOT_DATE` is `datetime` for stories and their feature lookup, `date` for epics and the agile data.
 - Columns of uncertain database type (`BV`, `SWAG`, `SPRINT_COUNT`) are left out on purpose so their native type reaches the `.hyper` file unchanged.

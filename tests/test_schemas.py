@@ -15,14 +15,13 @@ from schemas import datatypes
 SQL_DIR = Path(__file__).resolve().parent.parent / "sql"
 SUPPORTED_TYPES = {"datetime", "date", "float", "string"}
 
+# One mapping per pipeline, covering every query that pipeline runs.
 CASES = {
     "stories": (datatypes.EXPECTED_DTYPES_STORIES,
-                ["Asum.sql", "Ahist.sql", "Ahist_recent.sql"]),
-    "features": (datatypes.EXPECTED_DTYPES_FEATURES, ["EsumEhist.sql"]),
+                ["Asum.sql", "Ahist.sql", "Ahist_recent.sql", "EsumEhist.sql"]),
     "epics": (datatypes.EXPECTED_DTYPES_EPICS,
-              ["EpicSummary.sql", "EpicHistory.sql", "EpicHistory_recent.sql"]),
-    "agile": (datatypes.EXPECTED_DTYPES_AGILE,
-              ["AgileHistory.sql", "AgileSummary.sql",
+              ["EpicSummary.sql", "EpicHistory.sql", "EpicHistory_recent.sql",
+               "AgileHistory.sql", "AgileSummary.sql",
                "AgileSprintRange.sql", "AgileSprintRange_summary.sql"]),
 }
 

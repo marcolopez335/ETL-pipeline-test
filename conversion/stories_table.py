@@ -32,7 +32,7 @@ from datetime import datetime
 
 import polars as pl
 
-from schemas.datatypes import EXPECTED_DTYPES_FEATURES, EXPECTED_DTYPES_STORIES
+from schemas.datatypes import EXPECTED_DTYPES_STORIES
 # get_logger comes via shared so this module imports (and its tests run)
 # without the proprietary csm_commonlib package
 from conversion.shared import (
@@ -74,7 +74,7 @@ def fetch_features(config: dict) -> pl.DataFrame:
     """Feature-level history + summary lookup (``sql_features``), dtypes normalized."""
     cfg = config["stories"]
     df = run_query(cfg["sql_features"], database=config["database"]["name"], config=config)
-    return clean_dtypes(df, EXPECTED_DTYPES_FEATURES)
+    return clean_dtypes(df, EXPECTED_DTYPES_STORIES)
 
 
 # ---------------------------------------------------------------------------

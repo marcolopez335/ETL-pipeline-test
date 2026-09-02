@@ -49,7 +49,7 @@ from datetime import date, datetime
 
 import polars as pl
 
-from schemas.datatypes import EXPECTED_DTYPES_AGILE, EXPECTED_DTYPES_EPICS
+from schemas.datatypes import EXPECTED_DTYPES_EPICS
 from conversion.burnup_table import build_burnup
 from conversion.console import print_header, print_pipeline_complete, step_spinner
 # get_logger comes via shared so this module imports (and its tests run)
@@ -234,7 +234,7 @@ def fetch_agile(config: dict, sql_key: str) -> pl.DataFrame:
     """
     cfg = config["epics"]
     df = run_query(cfg[sql_key], database=config["database"]["name"], config=config)
-    return clean_dtypes(df, EXPECTED_DTYPES_AGILE)
+    return clean_dtypes(df, EXPECTED_DTYPES_EPICS)
 
 
 # ---------------------------------------------------------------------------

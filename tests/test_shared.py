@@ -9,8 +9,6 @@ import pytest
 
 from conversion.shared import (
     _align_schemas,
-    _configure_result_encoding,
-    _decode_sql_text,
     _supertype,
     clean_dtypes,
     drop_todays_history,
@@ -199,35 +197,3 @@ def test_validate_history_and_parallel_fetch():
     par = parallel_fetch(jobs, config={"database": {"parallel_fetch": True}})
     seq = parallel_fetch(jobs, config={"database": {"parallel_fetch": False}})
     assert par == {"a": 1, "b": 2, "c": 3} == seq
-
-
-# --- SQL file & ODBC robustness ----------------------------------------------
-
-def test_decode_sql_text_tolerates_windows_bytes():
-    assert _decode_sql_text(b"SELECT 1") == "SELECT 1"
-    assert _decode_sql_text(b"\xa0SELECT 1") == " SELECT 1"          # raw cp1252 nbsp
-    assert _decode_sql_text("SELECT 1".encode("utf-8")) == "SELECT 1"
-    assert _decode_sql_text(b"\xef\xbb\xbfSELECT 1") == "SELECT 1"    # UTF-8 BOM
-
-
-def test_configure_result_encoding_is_safe():
-    class NoConn:
-        pass
-
-    class FakeConn:
-        connection = object()
-
-    calls = []
-
-    class RawWithDecoding:
-        def setdecoding(self, sqltype, encoding=None):
-            calls.append(encoding)
-
-    class ConnWithDecoding:
-        connection = RawWithDecoding()
-
-    _configure_result_encoding(NoConn(), {"database": {"result_encoding": "cp1252"}})
-    _configure_result_encoding(FakeConn(), None)
-    _configure_result_encoding(ConnWithDecoding(), {"database": {"result_encoding": "latin-1"}})
-    # pyodbc may be absent (calls stays empty); if present, latin-1 was used
-    assert calls == [] or all(e == "latin-1" for e in calls)

@@ -1,11 +1,11 @@
 """Expected column dtypes consumed by ``conversion.shared.clean_dtypes``.
 
-Each mapping is ``{COLUMN_NAME: "datetime" | "date" | "float" | "string"}``
-and describes the columns a SQL query returns (see ``sql/README.md``). Keys
-must match the SQL output names exactly -- Tibco returns SCREAMING_SNAKE_CASE.
-Columns absent from a DataFrame are skipped, so one mapping can cover every
-query a pipeline runs: by design the summary, full-history and recent-history
-queries of a pipeline share a select list.
+One mapping per pipeline, ``{COLUMN_NAME: "datetime" | "date" | "float" | "string"}``,
+covering every query that pipeline runs (see ``sql/README.md``). Keys must
+match the SQL output names exactly -- Tibco returns SCREAMING_SNAKE_CASE.
+Columns absent from a DataFrame are skipped, so it is safe to list every
+column the pipeline is aware of and apply the same mapping to the summary,
+the history and the lookup queries.
 
 Casts are non-strict (unconvertible values become null). Columns whose
 database type is not known for certain (BV, SWAG, SPRINT_COUNT) are left out
@@ -15,7 +15,8 @@ on purpose so their native type passes through to the .hyper output as-is.
 renamed SQL column fails CI instead of silently skipping its cast.
 """
 
-# Story rows -- Asum.sql (summary), Ahist.sql / Ahist_recent.sql (history).
+# Stories pipeline -- Asum.sql (summary), Ahist.sql / Ahist_recent.sql
+# (history) and EsumEhist.sql (the feature lookup joined onto stories).
 EXPECTED_DTYPES_STORIES: dict[str, str] = {
     # Identifiers & names
     "STORY_NUMBER": "string",
@@ -44,8 +45,8 @@ EXPECTED_DTYPES_STORIES: dict[str, str] = {
     "CUSTOMER_EPIC_ID": "string",
     "CUSTOMER_EPIC": "string",
 
-    # Dates -- SNAPSHOT_DATE stays a timestamp in STORIES.hyper (join key with
-    # the feature lookup, and what the workbooks were built on)
+    # Dates -- SNAPSHOT_DATE stays a timestamp in STORIES.hyper (the join key
+    # with the feature lookup, and what the workbooks were built on)
     "SNAPSHOT_DATE": "datetime",
     "LAST_UPDATED": "datetime",
     "CREATE_DATE": "datetime",
@@ -61,32 +62,25 @@ EXPECTED_DTYPES_STORIES: dict[str, str] = {
 
     # Numeric
     "ESTIMATE": "float",
-}
 
-# Feature attributes joined onto stories -- EsumEhist.sql (feature summary
-# UNION ALL feature history, keyed by FEATURE_ID + SNAPSHOT_DATE).
-EXPECTED_DTYPES_FEATURES: dict[str, str] = {
-    "FEATURE_ID": "string",
+    # Feature lookup (EsumEhist.sql) -- FEATURE_ID, SNAPSHOT_DATE, TARGET_START
+    # and TARGET_END above apply to it as well
     "FEATURE_TEAM": "string",
     "FEATURE_PI": "string",
     "FEATURE_FIX_VERSION": "string",
     "FEATURE_STATUS": "string",
-
-    # Must match the stories' SNAPSHOT_DATE dtype -- it is the join key
-    "SNAPSHOT_DATE": "datetime",
-    "TARGET_START": "datetime",
-    "TARGET_END": "datetime",
     "ACTUAL_END_DATE": "datetime",
     "IMET_SUMMARY_LAST_UPDATED": "datetime",
-
     "FEATURE_OPEN_POINTS": "float",
     "FEATURE_TOTAL_POINTS": "float",
 }
 
-# Epic hierarchy rows -- EpicSummary.sql (summary), EpicHistory.sql /
-# EpicHistory_recent.sql (history). One row per Epic with its Feature,
-# Sub-Capability, Customer Capability and Customer Epic flattened on.
+# Epics pipeline -- EpicSummary.sql (summary), EpicHistory.sql /
+# EpicHistory_recent.sql (history), AgileHistory.sql / AgileSummary.sql
+# (story-point rollups per feature and PI) and AgileSprintRange*.sql
+# (sprint names and dates per PI).
 EXPECTED_DTYPES_EPICS: dict[str, str] = {
+    # Epic hierarchy: Epic -> Feature -> Sub-Capability -> Customer Capability -> Customer Epic
     "EPIC_KEY": "string",
     "EPIC_SUMMARY": "string",
     "FEATURE_KEY": "string",
@@ -97,28 +91,22 @@ EXPECTED_DTYPES_EPICS: dict[str, str] = {
     "CUSTEPIC_KEY": "string",
     "PROGRAM": "string",
 
-    # Daily grain -- a Date, matching the agile rollups it is joined with
-    # and the Date column EPICS.hyper has always carried
-    "SNAPSHOT_DATE": "date",
-
     "EPIC_ESTIMATE": "float",
     "EPIC_OPEN_ESTIMATE": "float",
     "FEATURE_ESTIMATE": "float",
     "FEATURE_OPEN_ESTIMATE": "float",
     "CUSTCAP_ESTIMATE": "float",
-}
 
-# Agile rollups and sprint ranges -- AgileHistory.sql, AgileSummary.sql,
-# AgileSprintRange.sql, AgileSprintRange_summary.sql.
-EXPECTED_DTYPES_AGILE: dict[str, str] = {
+    # Daily grain -- a Date on every side of the epic / agile / sprint joins,
+    # and the Date column EPICS.hyper has always carried
+    "SNAPSHOT_DATE": "date",
+
+    # Agile rollups and sprint ranges
     "FEATURE_ID": "string",
     "PROGRAM_INCREMENT": "string",
     "SPRINT_NAME": "string",
-
-    "SNAPSHOT_DATE": "date",
     "BEGIN_DATE": "datetime",
     "END_DATE": "datetime",
-
     "TOTAL_ESTIMATE": "float",
     "DONE_ESTIMATE": "float",
     "OPEN_ESTIMATE": "float",
