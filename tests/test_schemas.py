@@ -45,7 +45,7 @@ def _split_top_level(text: str) -> list[str]:
 
 def sql_output_columns(filename: str) -> set[str]:
     """Column names produced by the query's final SELECT (after any CTEs)."""
-    text = (SQL_DIR / filename).read_text(encoding="utf-8", errors="replace")
+    text = (SQL_DIR / filename).read_text(encoding="utf-8")
     text = re.sub(r"--[^\n]*", "", text)
     upper = text.upper()
     start = upper.rfind("SELECT") + len("SELECT")
