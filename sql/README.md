@@ -37,5 +37,6 @@ Filenames are legacy and abbreviated in places (`A*` = agile/story data,
 - History queries must return a `SNAPSHOT_DATE` column and the pipeline's key column (`STORY_NUMBER`, `EPIC_KEY`)
 - A pipeline's summary and history queries return the same select list (the stories summary selects `NULL AS SNAPSHOT_DATE`; the epic history adds `SNAPSHOT_DATE`) — `tests/test_schemas.py` enforces this and checks `schemas/datatypes.py` against the column names here, so alias every computed column
 - Column names are SCREAMING_SNAKE_CASE because that is what the Tibco database returns
+- Adding a column to a history query (`Ahist*.sql`, `EpicHistory*.sql`): add it to the summary query and to `schemas/datatypes.py` in the same change, then run the pipeline once with `--rebuild-cache` — the parquet cache was seeded before the column existed and the incremental update only refreshes the last 30 days
 - The epic SQL uses a CTE hierarchy: epic -> feature -> subcapability -> customercapability -> customerepic
 - `ORDER BY` clauses in these queries do not affect pipeline logic — they are for manual inspection only

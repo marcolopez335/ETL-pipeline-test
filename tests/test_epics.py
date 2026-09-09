@@ -1,6 +1,6 @@
 """Epics build chain on in-memory frames: agile joins, union, sprint lookups, ACRP."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import polars as pl
 
@@ -26,6 +26,7 @@ def summary_frame() -> pl.DataFrame:
         "FEATURE_KEY": ["F1", "F2", None],
         "SUBCAPABILITY_KEY": ["SC1", "SC2", None],
         "FEATURE_FIX_VERSION": ["R26.1, R26.2", "R26.2", None],
+        "BASELINE_PLANNED_END": [datetime(2026, 10, 1), datetime(2026, 11, 15), None],
         "PROGRAM": ["Prog A", "Prog A", None],
     })
 
@@ -39,6 +40,7 @@ def history_frame() -> pl.DataFrame:
         "FEATURE_KEY": ["F1", "F2", "F1", "F2"],
         "SUBCAPABILITY_KEY": ["SC1", "SC2", "SC1", "SC2"],
         "FEATURE_FIX_VERSION": ["R26.1", "R26.2", "R26.1", "R26.2"],
+        "BASELINE_PLANNED_END": [datetime(2026, 9, 1), datetime(2026, 11, 15)] * 2,
         "PROGRAM": ["Prog A"] * 4,
         "IS_SYNTHETIC": [False] * 4,
     })
@@ -193,3 +195,18 @@ def test_sprint_sort_key_orders_ip_last_and_round_trips():
     df = pl.DataFrame({"SPRINT_VERSION": versions}).with_columns(_sprint_sort_key().alias("k"))
     assert df["k"].to_list() == [260102, 260199, 260110, 250401]
     assert df.select(_sort_key_to_version("k", "v"))["v"].to_list() == versions
+
+
+def test_baseline_planned_end_reaches_epics_and_acrp():
+    """Feature-level PLANNED_END rides along untouched: summary rows carry the
+    live value, snapshot rows the value as of that snapshot, ACRP the live one."""
+    df, acrp = build()
+
+    e1_today = df.filter((pl.col("Snapshot Date") == TODAY) & (pl.col("Epic Key") == "E1"))
+    assert e1_today["Baseline Planned End"].unique().to_list() == [datetime(2026, 10, 1)]
+    e1_prior = df.filter((pl.col("Snapshot Date") == PRIOR) & (pl.col("Epic Key") == "E1"))
+    assert e1_prior["Baseline Planned End"].item() == datetime(2026, 9, 1)
+    assert df.filter(pl.col("Epic Key") == "E3")["Baseline Planned End"].item() is None
+
+    assert acrp.filter(pl.col("EPIC_KEY") == "E1")["BASELINE_PLANNED_END"].unique().to_list() == [datetime(2026, 10, 1)]
+    assert date(2026, 10, 1) == datetime(2026, 10, 1).date()   # guard against a Date/Datetime mix-up above

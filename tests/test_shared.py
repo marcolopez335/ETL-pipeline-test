@@ -1,5 +1,6 @@
 """Pure-Polars helpers in conversion.shared -- runs without csm_commonlib."""
 
+import logging
 import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -14,6 +15,7 @@ from conversion.shared import (
     drop_todays_history,
     fill_missing_snapshots,
     get_last_n_snapshots,
+    history_fetch_plan,
     parallel_fetch,
     rename_to_snake_case,
     rename_to_title_case,
@@ -197,3 +199,63 @@ def test_validate_history_and_parallel_fetch():
     par = parallel_fetch(jobs, config={"database": {"parallel_fetch": True}})
     seq = parallel_fetch(jobs, config={"database": {"parallel_fetch": False}})
     assert par == {"a": 1, "b": 2, "c": 3} == seq
+
+
+# --- cache vs. SQL column drift ----------------------------------------------
+
+def test_history_fetch_plan_rebuild_forces_the_full_query(tmp_path):
+    cache = tmp_path / "cache.parquet"
+    assert history_fetch_plan(cache, "full.sql", "recent.sql") == ("full.sql", "full")
+    cache.write_bytes(b"")
+    assert history_fetch_plan(cache, "full.sql", "recent.sql") == ("recent.sql", "recent")
+    assert history_fetch_plan(cache, "full.sql", "recent.sql", rebuild=True) == ("full.sql", "full")
+
+
+def test_cache_merge_warns_when_the_query_gained_a_column(tmp_path, caplog):
+    """A column added to the history SQL after the cache was seeded is null for
+    every cached snapshot (only the recent window carries it). The merge must
+    say so, because downstream it looks exactly like a broken join."""
+    old_day, new_day = date(2026, 3, 2), date(2026, 8, 31)
+    cached = pl.DataFrame({"EPIC_KEY": ["E1"], "SNAPSHOT_DATE": [old_day]})
+    recent = pl.DataFrame({
+        "EPIC_KEY": ["E1"], "SNAPSHOT_DATE": [new_day],
+        "BASELINE_PLANNED_END": [date(2026, 10, 1)],
+    })
+    cache_path = tmp_path / "cache.parquet"
+    cached.write_parquet(cache_path)
+
+    with caplog.at_level(logging.WARNING, logger="conversion.shared"):
+        merged = update_history_cache_with_recent(
+            pl.scan_parquet(cache_path), recent, "EPIC_KEY",
+            config={"cache": {"min_retention_pct": 0.0}},
+        )
+
+    by_day = {r["SNAPSHOT_DATE"]: r["BASELINE_PLANNED_END"] for r in merged.to_dicts()}
+    assert by_day[old_day] is None                 # the cached snapshot cannot have it
+    assert by_day[new_day] == date(2026, 10, 1)    # the recent window does
+    assert any("BASELINE_PLANNED_END" in m and "--rebuild-cache" in m for m in caplog.messages)
+
+
+def test_update_history_rebuild_reseeds_from_the_full_prefetch(tmp_path, monkeypatch):
+    from conversion import shared
+
+    monkeypatch.setattr(shared, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(shared, "BACKUP_DIR", tmp_path / "backups")
+    cache_path = tmp_path / "epics_history_cache.parquet"
+    pl.DataFrame({"EPIC_KEY": ["E1"], "SNAPSHOT_DATE": [date(2026, 3, 2)]}).write_parquet(cache_path)
+
+    full = pl.DataFrame({
+        "EPIC_KEY": ["E1", "E1"],
+        "SNAPSHOT_DATE": [date(2026, 3, 2), date(2026, 8, 31)],
+        "BASELINE_PLANNED_END": [date(2026, 10, 1)] * 2,
+    })
+    out = shared.update_history(
+        "full.sql", "recent.sql", "EPIC_KEY", cache_path,
+        config={"cache": {"backup_enabled": True, "max_cache_backups": 3}},
+        prefetched=full, prefetched_kind="full", rebuild=True,
+    )
+
+    assert out["BASELINE_PLANNED_END"].null_count() == 0
+    reseeded = pl.read_parquet(cache_path)
+    assert "BASELINE_PLANNED_END" in reseeded.columns and reseeded.height == 2
+    assert list((tmp_path / "backups").glob("epics_history_cache_*.parquet"))   # old cache kept

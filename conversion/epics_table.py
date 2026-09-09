@@ -379,7 +379,7 @@ def build_epics(
 # Entry points
 # ---------------------------------------------------------------------------
 
-def run_update_cache(config: dict, force: bool = False) -> None:
+def run_update_cache(config: dict, force: bool = False, rebuild_cache: bool = False) -> None:
     """Refresh the epics history cache only (no export)."""
     cfg = config["epics"]
     cache_path = get_cache_path(cfg["cache_filename"])
@@ -389,13 +389,13 @@ def run_update_cache(config: dict, force: bool = False) -> None:
         update_history(
             cfg["sql_history_full"], cfg["sql_history_recent"],
             cfg["key_column"], cache_path,
-            config=config, force=force,
+            config=config, force=force, rebuild=rebuild_cache,
         )
     logger.info("Epics cache update complete")
 
 
 def run(config: dict, publish: bool = False, publish_targets: list[str] | None = None,
-        force: bool = False) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+        force: bool = False, rebuild_cache: bool = False) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """Full epics pipeline: fetch, cache, build, export and (optionally) publish.
 
     Returns ``(epics, acrp, burnup)`` for the interactive SQL shell.
@@ -413,7 +413,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] | None =
 
     with step_spinner(1, total, "Fetching epic, agile & sprint data (parallel)"):
         hist_sql, hist_kind = history_fetch_plan(
-            cache_path, cfg["sql_history_full"], cfg["sql_history_recent"])
+            cache_path, cfg["sql_history_full"], cfg["sql_history_recent"], rebuild=rebuild_cache)
         db = config["database"]["name"]
         fetched = parallel_fetch({
             "summary": lambda: fetch_summary(config),
@@ -434,7 +434,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] | None =
             cfg["sql_history_full"], cfg["sql_history_recent"],
             cfg["key_column"], cache_path,
             config=config, force=force,
-            prefetched=fetched["history"], prefetched_kind=hist_kind,
+            prefetched=fetched["history"], prefetched_kind=hist_kind, rebuild=rebuild_cache,
         )
         df_history = clean_dtypes(df_history, EXPECTED_DTYPES_EPICS)
     log_dataframe_summary(df_history, "Epics History")

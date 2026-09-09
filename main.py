@@ -93,6 +93,9 @@ def _build_parser() -> argparse.ArgumentParser:
                              "(config key: tableau.external)")
     parser.add_argument("--force", action="store_true",
                         help="Bypass cache shrinkage safety check")
+    parser.add_argument("--rebuild-cache", action="store_true",
+                        help="Ignore the existing history cache and reseed it from the full "
+                             "history query (do this once after adding a column to a history SQL file)")
     parser.add_argument("--query", action="store_true",
                         help="Open interactive SQL shell after pipeline runs")
     parser.add_argument("--query-only", action="store_true",
@@ -139,9 +142,9 @@ def main() -> int:
 
     if args.update_cache:
         if args.stories or run_all:
-            stories.run_update_cache(config, force=args.force)
+            stories.run_update_cache(config, force=args.force, rebuild_cache=args.rebuild_cache)
         if args.epics or run_all:
-            epics.run_update_cache(config, force=args.force)
+            epics.run_update_cache(config, force=args.force, rebuild_cache=args.rebuild_cache)
         return 0
 
     # Pre-flight credential check — runs outside spinners so stdin is
@@ -155,12 +158,14 @@ def main() -> int:
     if run_all or args.stories:
         df_stories = stories.run(
             config, publish=do_publish, publish_targets=publish_targets, force=args.force,
+            rebuild_cache=args.rebuild_cache,
         )
         sql_tables["stories"] = df_stories
 
     if run_all or args.epics:
         df_epics, df_acrp, df_burnup = epics.run(
             config, publish=do_publish, publish_targets=publish_targets, force=args.force,
+            rebuild_cache=args.rebuild_cache,
         )
         sql_tables["epics"] = df_epics
         sql_tables["acrp"] = df_acrp

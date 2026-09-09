@@ -42,6 +42,7 @@ History data is cached as parquet in `../cache/`. On each run:
 - If a cache exists, `scan_parquet` lazily reads it — the anti-join with recent data runs without loading the full cache into memory
 - Only the filtered rows (not in recent) are collected, merged with recent data, and written back
 - A safety check prevents the cache from shrinking by more than 2% (`--force` overrides it)
+- The merge warns when the recent query returns columns the cache lacks (or vice versa): a column added to a history SQL file only reaches the recent window, and `_align_schemas` fills it with nulls for every cached snapshot — which downstream looks like a broken join. `--rebuild-cache` reseeds the cache from the full history query (the old file is backed up first)
 
 ## Epics specifics
 

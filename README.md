@@ -141,6 +141,7 @@ python main.py [pipeline] [action] [options]
 | Flag | Description |
 |------|-------------|
 | `--force` | Bypass cache shrinkage safety check (use if cache needs to shrink) |
+| `--rebuild-cache` | Ignore the existing history cache and reseed it from the full history query — run once after adding a column to a history SQL file |
 | `--verbose` | Show full per-column stats tables after each step (slower at large row counts) |
 
 ### Examples
@@ -157,6 +158,9 @@ python main.py --update-cache --stories
 
 # Force a cache rebuild when data legitimately shrank
 python main.py --epics --update-cache --force
+
+# Reseed the epics cache after adding a column to EpicHistory*.sql
+python main.py --epics --rebuild-cache
 
 # Explore cached data without hitting the database
 python main.py --query-only
@@ -198,6 +202,7 @@ Rules that hold everywhere:
 - **The summary owns today.** History rows dated today are dropped before the union and the summary rows are stamped with today's date, so nothing is double-counted on snapshot days. The cache still stores the official snapshot; tomorrow's export serves today from history.
 - **`SNAPSHOT_DATE` is the time axis.** NULL means "live" until the final stamp. It is a timestamp in `STORIES.hyper` and a date in `EPICS.hyper` — the types the workbooks were built on.
 - **Casing.** SCREAMING_SNAKE_CASE from the database through the build; Title Case only at export. The `build_*` functions are pure DataFrame → DataFrame and are what the tests exercise.
+- **A new column in a history query needs a cache rebuild.** The incremental update only refreshes the last 30 days, so every snapshot already in the parquet cache would stay null for the new column. The pipeline warns when it sees this; run once with `--rebuild-cache`.
 
 ## Pipelines
 

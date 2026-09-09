@@ -27,6 +27,11 @@ tests in `tests/`.
 - **The summary owns today.** `shared.drop_todays_history` removes history
   rows dated today before the union; `fill_missing_snapshots` never
   synthesizes today. The cache still keeps the official snapshot.
+- **A column added to a history SQL file needs `--rebuild-cache` once.** The
+  parquet cache predates it and the incremental update only refreshes the
+  last 30 days, so cached snapshots would stay null for it (the merge warns
+  about this drift). Add the column to the summary query and to
+  `schemas/datatypes.py` in the same change.
 - **Output contracts Tableau depends on — do not change casually:**
   Title Case columns in `STORIES.hyper` / `EPICS.hyper`, SCREAMING_SNAKE_CASE
   in `EPICS_ACRP.hyper` / `FEATURE_BURNUP.hyper`; `SNAPSHOT_DATE` is a

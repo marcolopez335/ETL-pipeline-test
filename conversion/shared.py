@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover — fallback for unit-test environments
         return logger
 
 from conversion.console import (
-    print_polars_summary, print_info, print_success, print_error,
+    print_polars_summary, print_info, print_success, print_error, print_warning,
 )
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -420,16 +420,44 @@ def fetch_history(
     return validate_history(df, key_col)
 
 
-def history_fetch_plan(cache_path: Path, sql_full: str, sql_recent: str) -> tuple[str, str]:
+def history_fetch_plan(cache_path: Path, sql_full: str, sql_recent: str,
+                       rebuild: bool = False) -> tuple[str, str]:
     """Choose which history SQL to run based on cache presence.
 
     Returns (sql_filename, kind) where kind is 'full' or 'recent'. Lets
     pipelines prefetch the history query in parallel with other queries
-    and hand the result to update_history() afterwards.
+    and hand the result to update_history() afterwards. ``rebuild`` picks
+    the full query even when a cache exists (see ``--rebuild-cache``).
     """
-    if cache_path.exists():
+    if cache_path.exists() and not rebuild:
         return sql_recent, "recent"
     return sql_full, "full"
+
+
+def _warn_on_column_drift(cached_cols: list[str], recent_cols: list[str]) -> None:
+    """Flag columns the history SQL gained or lost since the cache was seeded.
+
+    The incremental update only refreshes the recent window, so a column
+    added to the history query reaches those rows only: _align_schemas
+    fills it with nulls for every cached snapshot, which looks exactly like
+    a broken join downstream. The fix is a one-off ``--rebuild-cache``.
+    """
+    added = [c for c in recent_cols if c not in cached_cols]
+    dropped = [c for c in cached_cols if c not in recent_cols]
+    if added:
+        msg = (
+            f"History cache has no column(s) {added}: every cached snapshot will be "
+            f"null for them until the cache is reseeded. Run once with --rebuild-cache."
+        )
+        logger.warning(msg)
+        print_warning(msg)
+    if dropped:
+        msg = (
+            f"Recent history no longer returns column(s) {dropped} that the cache still "
+            f"carries; new snapshots will be null for them. Run --rebuild-cache to drop them."
+        )
+        logger.warning(msg)
+        print_warning(msg)
 
 
 def update_history_cache_with_recent(
@@ -465,6 +493,7 @@ def update_history_cache_with_recent(
     )
 
     # Align schemas before concat — cached from parquet may differ from fresh query
+    _warn_on_column_drift(cached_keep.columns, recent.columns)
     cached_keep, recent = _align_schemas(cached_keep, recent)
 
     # Concat and free the inputs immediately to avoid holding 2x in memory
@@ -498,16 +527,25 @@ def update_history(
     sql_full: str, sql_recent: str, key_col: str, cache_path: Path,
     config: dict | None = None, force: bool = False,
     prefetched: pl.DataFrame | None = None, prefetched_kind: str | None = None,
+    rebuild: bool = False,
 ) -> pl.DataFrame:
     """Merge fresh history into the cache.
 
     ``prefetched``/``prefetched_kind`` let a pipeline fetch the history
     query concurrently with its other queries (see history_fetch_plan)
     and pass the result in, avoiding a second sequential fetch here.
+
+    ``rebuild`` ignores the existing cache and reseeds it from the full
+    history query; the old file is backed up first when
+    ``cache.backup_enabled`` is on. Do this once after adding a column to
+    a history SQL file, otherwise every cached snapshot stays null for it.
     """
-    cached_lf = read_history_cache(cache_path)
+    cached_lf = None if rebuild else read_history_cache(cache_path)
 
     if cached_lf is None:
+        if rebuild and cache_path.exists():
+            logger.info(f"Rebuilding history cache from the full query: {cache_path}")
+            print_info(f"Rebuilding history cache: [dim]{cache_path.name}[/]")
         if prefetched is not None and prefetched_kind == "full":
             df = validate_history(prefetched, key_col)
             write_history_cache(df, cache_path, config=config)
