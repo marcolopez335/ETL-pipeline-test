@@ -90,7 +90,7 @@ EXPECTED_DTYPES_EPICS: dict[str, str] = {
     "CUSTCAP_KEY": "string",
     "CUSTEPIC_KEY": "string",
     "PROGRAM": "string",
-    "BASELINE_PLANNED_END": "datetime",   # feature-level PLANNED_END
+    "BASELINE_PLANNED_END": "datetime",   # feature PLANNED_END; NULL in history SQL, filled in the build
 
     "EPIC_ESTIMATE": "float",
     "EPIC_OPEN_ESTIMATE": "float",

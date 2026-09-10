@@ -25,6 +25,10 @@ Data model
   sprint names and dates per PI, parsed into MIN_SPRINT / MAX_SPRINT and
   the CURRENT_SPRINT containing today. History rows use the per-snapshot
   lookup; summary rows fall back to the current one.
+* **Baseline columns** -- ``AMMM_JIRA_EPIC_HISTORY`` has no PLANNED_END, so
+  the history queries select ``NULL AS BASELINE_PLANNED_END`` and the build
+  carries each feature's current (summary) value onto its snapshot rows
+  (``carry_baseline_from_summary``): one baseline per feature across time.
 
 The summary owns "today" in the export: history rows dated today are
 dropped first (``shared.drop_todays_history``), exactly as in stories.
@@ -69,6 +73,13 @@ PIPELINE_NAME = "Epics"
 AGILE_LEFT_KEY = "FEATURE_KEY"
 AGILE_RIGHT_KEY = "FEATURE_ID"
 AGILE_SUFFIX = "_agile"
+
+# Feature-level columns the history table does not carry. The history SQL
+# selects NULL for them; the build fills every snapshot row with the
+# feature's current value from the summary, so each is one baseline per
+# feature across time.
+BASELINE_KEY = "FEATURE_KEY"
+BASELINE_COLUMNS = ["BASELINE_PLANNED_END"]
 
 # Sprint lookups: history rows are keyed per snapshot, summary rows per PI only
 SPRINT_PARTITION_HISTORY = ["SNAPSHOT_DATE", "PROGRAM_INCREMENT"]
@@ -256,6 +267,48 @@ def join_agile(df: pl.DataFrame, df_agile: pl.DataFrame, by_snapshot: bool) -> p
     return df.join(df_agile, left_on=left_on, right_on=right_on, how="left", suffix=AGILE_SUFFIX)
 
 
+def carry_baseline_from_summary(df: pl.DataFrame, df_summary: pl.DataFrame,
+                                columns: list[str] | None = None) -> pl.DataFrame:
+    """Fill baseline columns on snapshot rows from the live summary, per feature.
+
+    The history table does not carry PLANNED_END, so the history queries
+    return NULL for BASELINE_PLANNED_END. A baseline is one value per
+    feature across time: every snapshot row of a feature takes the feature's
+    current value from the summary. Rows already carrying a value keep it;
+    rows with no feature, or whose feature is gone from the summary, stay
+    null.
+    """
+    if columns is None:
+        columns = BASELINE_COLUMNS
+    cols = [c for c in columns if c in df.columns and c in df_summary.columns]
+    if not cols:
+        return df
+
+    lookup = (
+        df_summary.select([BASELINE_KEY] + cols)
+        .filter(pl.col(BASELINE_KEY).is_not_null())
+        .unique(subset=[BASELINE_KEY], keep="first")
+        .rename({c: f"{c}__baseline" for c in cols})
+    )
+    before = {c: df[c].null_count() for c in cols}
+    df = df.join(lookup, on=BASELINE_KEY, how="left")
+
+    fills = []
+    for c in cols:
+        baseline = pl.col(f"{c}__baseline")
+        if df.schema[c] != pl.Null:
+            baseline = baseline.cast(df.schema[c], strict=False)
+        fills.append(pl.coalesce([pl.col(c), baseline]).alias(c))
+    df = df.with_columns(fills).drop([f"{c}__baseline" for c in cols])
+
+    for c in cols:
+        logger.info(
+            f"Baseline {c}: filled {before[c] - df[c].null_count()} of {before[c]} "
+            f"null rows from the summary ({lookup.height} features)"
+        )
+    return df
+
+
 def apply_transforms(df: pl.DataFrame, lookups: SprintLookups,
                      now: datetime | None = None) -> pl.DataFrame:
     """Post-union computed columns (SCREAMING_SNAKE_CASE in and out).
@@ -368,6 +421,7 @@ def build_epics(
     df_summary = join_agile(df_summary, agile_summary, by_snapshot=False)
 
     df = union_data(df_summary, df_history)
+    df = carry_baseline_from_summary(df, df_summary)
     df = apply_transforms(df, lookups, now=now)
 
     # ACRP before the SNAPSHOT_DATE fill -- its filter relies on the null marker

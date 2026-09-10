@@ -202,6 +202,7 @@ Rules that hold everywhere:
 - **The summary owns today.** History rows dated today are dropped before the union and the summary rows are stamped with today's date, so nothing is double-counted on snapshot days. The cache still stores the official snapshot; tomorrow's export serves today from history.
 - **`SNAPSHOT_DATE` is the time axis.** NULL means "live" until the final stamp. It is a timestamp in `STORIES.hyper` and a date in `EPICS.hyper` — the types the workbooks were built on.
 - **Casing.** SCREAMING_SNAKE_CASE from the database through the build; Title Case only at export. The `build_*` functions are pure DataFrame → DataFrame and are what the tests exercise.
+- **Baseline columns come from the summary.** The history table has no `PLANNED_END`, so the history queries select `NULL AS BASELINE_PLANNED_END` and the epics build fills every snapshot row from the feature's current value: one baseline per feature across time. Declare such columns in the schema — an all-NULL column arrives untyped, and without the cast the union would turn the summary's dates into text.
 - **A new column in a history query needs a cache rebuild.** The incremental update only refreshes the last 30 days, so every snapshot already in the parquet cache would stay null for the new column. The pipeline warns when it sees this; run once with `--rebuild-cache`.
 
 ## Pipelines
@@ -223,7 +224,7 @@ Rules that hold everywhere:
 2. Update the incremental history cache
 3. Fill missing weekly snapshots (synthetic)
 4. Drop history rows dated today (same rule as stories); join the agile rollups onto history (`FEATURE_KEY` + `SNAPSHOT_DATE`) and onto summary (`FEATURE_KEY`)
-5. Union summary with history, apply transformations (`LAST_UPDATED`, `SNAPSHOT_DATE_ALT`, `MIN_SPRINT` / `MAX_SPRINT`, `CURRENT_SPRINT`)
+5. Union summary with history; carry baseline columns (`BASELINE_PLANNED_END`) from the live summary onto every snapshot row of the same feature; apply transformations (`LAST_UPDATED`, `SNAPSHOT_DATE_ALT`, `MIN_SPRINT` / `MAX_SPRINT`, `CURRENT_SPRINT`)
 6. Build the ACRP release range view from the summary rows, then stamp summary rows with today's `SNAPSHOT_DATE` and rename to Title Case
 7. Build the feature burn-up view
 8. Export `EPICS.hyper`, `EPICS_ACRP.hyper` and `FEATURE_BURNUP.hyper`

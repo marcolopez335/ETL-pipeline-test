@@ -1,6 +1,6 @@
 """Epics build chain on in-memory frames: agile joins, union, sprint lookups, ACRP."""
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 import polars as pl
 
@@ -10,6 +10,7 @@ from conversion.epics_table import (
     build_acrp,
     build_epics,
     build_sprint_lookups,
+    carry_baseline_from_summary,
     join_agile,
 )
 
@@ -40,7 +41,7 @@ def history_frame() -> pl.DataFrame:
         "FEATURE_KEY": ["F1", "F2", "F1", "F2"],
         "SUBCAPABILITY_KEY": ["SC1", "SC2", "SC1", "SC2"],
         "FEATURE_FIX_VERSION": ["R26.1", "R26.2", "R26.1", "R26.2"],
-        "BASELINE_PLANNED_END": [datetime(2026, 9, 1), datetime(2026, 11, 15)] * 2,
+        "BASELINE_PLANNED_END": pl.Series([None] * 4, dtype=pl.Datetime("us")),   # NULL in the history SQL
         "PROGRAM": ["Prog A"] * 4,
         "IS_SYNTHETIC": [False] * 4,
     })
@@ -197,16 +198,40 @@ def test_sprint_sort_key_orders_ip_last_and_round_trips():
     assert df.select(_sort_key_to_version("k", "v"))["v"].to_list() == versions
 
 
-def test_baseline_planned_end_reaches_epics_and_acrp():
-    """Feature-level PLANNED_END rides along untouched: summary rows carry the
-    live value, snapshot rows the value as of that snapshot, ACRP the live one."""
+def test_baseline_planned_end_is_carried_onto_snapshot_rows():
+    """The history table has no PLANNED_END (the history SQL selects NULL), so
+    every snapshot row takes its feature's current value from the summary:
+    one baseline per feature across time. ACRP carries the live value."""
     df, acrp = build()
 
-    e1_today = df.filter((pl.col("Snapshot Date") == TODAY) & (pl.col("Epic Key") == "E1"))
-    assert e1_today["Baseline Planned End"].unique().to_list() == [datetime(2026, 10, 1)]
-    e1_prior = df.filter((pl.col("Snapshot Date") == PRIOR) & (pl.col("Epic Key") == "E1"))
-    assert e1_prior["Baseline Planned End"].item() == datetime(2026, 9, 1)
+    e1 = df.filter(pl.col("Epic Key") == "E1")
+    assert e1.height == 3                                     # prior snapshot + today x 2 PIs
+    assert e1["Baseline Planned End"].unique().to_list() == [datetime(2026, 10, 1)]
+    e2 = df.filter(pl.col("Epic Key") == "E2")
+    assert e2["Baseline Planned End"].unique().to_list() == [datetime(2026, 11, 15)]
     assert df.filter(pl.col("Epic Key") == "E3")["Baseline Planned End"].item() is None
+    assert df.schema["Baseline Planned End"] == pl.Datetime("us")   # stays a timestamp, not text
 
     assert acrp.filter(pl.col("EPIC_KEY") == "E1")["BASELINE_PLANNED_END"].unique().to_list() == [datetime(2026, 10, 1)]
-    assert date(2026, 10, 1) == datetime(2026, 10, 1).date()   # guard against a Date/Datetime mix-up above
+
+
+def test_carry_baseline_from_summary_keeps_values_and_leaves_unknown_features_null():
+    summary = pl.DataFrame({
+        "FEATURE_KEY": ["F1", "F1", None],                    # F1 appears twice (two epics / PIs)
+        "BASELINE_PLANNED_END": pl.Series([datetime(2026, 10, 1)] * 2 + [None], dtype=pl.Datetime("us")),
+    })
+    df = pl.DataFrame({
+        "EPIC_KEY": ["E1", "E9", "E3", "E1"],
+        "FEATURE_KEY": ["F1", "F9", None, "F1"],              # F9 is gone from the summary
+        "BASELINE_PLANNED_END": pl.Series(
+            [None, None, None, datetime(2026, 9, 1)], dtype=pl.Datetime("us")),
+    })
+    out = carry_baseline_from_summary(df, summary)
+    assert out.height == 4 and out.columns == df.columns
+    assert out["BASELINE_PLANNED_END"].to_list() == [
+        datetime(2026, 10, 1),   # filled from the summary
+        None,                    # feature unknown to the summary
+        None,                    # no feature at all
+        datetime(2026, 9, 1),    # existing value kept
+    ]
+    assert carry_baseline_from_summary(df.drop("BASELINE_PLANNED_END"), summary).columns == ["EPIC_KEY", "FEATURE_KEY"]

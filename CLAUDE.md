@@ -27,6 +27,12 @@ tests in `tests/`.
 - **The summary owns today.** `shared.drop_todays_history` removes history
   rows dated today before the union; `fill_missing_snapshots` never
   synthesizes today. The cache still keeps the official snapshot.
+- **Baseline columns come from the summary.** The history table has no
+  `PLANNED_END`; the history queries select `NULL AS BASELINE_PLANNED_END`
+  and `epics_table.carry_baseline_from_summary` fills each snapshot row
+  from the feature's current value (`BASELINE_COLUMNS`). Declare such
+  columns in the schema: an all-NULL column arrives untyped, and without
+  the cast the union demotes the summary's dates to text.
 - **A column added to a history SQL file needs `--rebuild-cache` once.** The
   parquet cache predates it and the incremental update only refreshes the
   last 30 days, so cached snapshots would stay null for it (the merge warns
