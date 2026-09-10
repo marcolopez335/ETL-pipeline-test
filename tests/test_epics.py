@@ -27,6 +27,8 @@ def summary_frame() -> pl.DataFrame:
         "FEATURE_KEY": ["F1", "F2", None],
         "SUBCAPABILITY_KEY": ["SC1", "SC2", None],
         "FEATURE_FIX_VERSION": ["R26.1, R26.2", "R26.2", None],
+        "PLANNED_START": [datetime(2026, 3, 1), datetime(2026, 4, 1), None],
+        "PLANNED_END": [datetime(2026, 10, 15), datetime(2026, 12, 1), None],       # DB TARGET_END, live
         "BASELINE_PLANNED_END": [datetime(2026, 10, 1), datetime(2026, 11, 15), None],
         "PROGRAM": ["Prog A", "Prog A", None],
     })
@@ -41,6 +43,8 @@ def history_frame() -> pl.DataFrame:
         "FEATURE_KEY": ["F1", "F2", "F1", "F2"],
         "SUBCAPABILITY_KEY": ["SC1", "SC2", "SC1", "SC2"],
         "FEATURE_FIX_VERSION": ["R26.1", "R26.2", "R26.1", "R26.2"],
+        "PLANNED_START": [datetime(2026, 3, 1), datetime(2026, 4, 1)] * 2,
+        "PLANNED_END": [datetime(2026, 10, 1), datetime(2026, 11, 15)] * 2,          # DB TARGET_END on that snapshot
         "BASELINE_PLANNED_END": pl.Series([None] * 4, dtype=pl.Datetime("us")),   # NULL in the history SQL
         "PROGRAM": ["Prog A"] * 4,
         "IS_SYNTHETIC": [False] * 4,
@@ -235,3 +239,21 @@ def test_carry_baseline_from_summary_keeps_values_and_leaves_unknown_features_nu
         datetime(2026, 9, 1),    # existing value kept
     ]
     assert carry_baseline_from_summary(df.drop("BASELINE_PLANNED_END"), summary).columns == ["EPIC_KEY", "FEATURE_KEY"]
+
+
+def test_planned_dates_are_per_snapshot_unlike_the_baseline():
+    """PLANNED_START / PLANNED_END (the database TARGET_* dates) come from the
+    history table too, so each snapshot keeps its own value; only the
+    baseline column is carried across from the summary."""
+    df, acrp = build()
+
+    e1_prior = df.filter((pl.col("Snapshot Date") == PRIOR) & (pl.col("Epic Key") == "E1"))
+    assert e1_prior["Planned Start"].item() == datetime(2026, 3, 1)
+    assert e1_prior["Planned End"].item() == datetime(2026, 10, 1)            # as of that snapshot
+    assert e1_prior["Baseline Planned End"].item() == datetime(2026, 10, 1)   # carried from summary
+
+    e1_today = df.filter((pl.col("Snapshot Date") == TODAY) & (pl.col("Epic Key") == "E1"))
+    assert e1_today["Planned End"].unique().to_list() == [datetime(2026, 10, 15)]   # live value
+    assert df.schema["Planned End"] == pl.Datetime("us")
+
+    assert {"PLANNED_START", "PLANNED_END", "BASELINE_PLANNED_END"} <= set(acrp.columns)

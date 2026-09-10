@@ -90,7 +90,12 @@ EXPECTED_DTYPES_EPICS: dict[str, str] = {
     "CUSTCAP_KEY": "string",
     "CUSTEPIC_KEY": "string",
     "PROGRAM": "string",
-    "BASELINE_PLANNED_END": "datetime",   # feature PLANNED_END; NULL in history SQL, filled in the build
+    # Feature dates. Workbook naming, kept on purpose: PLANNED_* are the
+    # database TARGET_START / TARGET_END; BASELINE_PLANNED_END is the database
+    # PLANNED_END (NULL in the history SQL, filled per feature in the build).
+    "PLANNED_START": "datetime",
+    "PLANNED_END": "datetime",
+    "BASELINE_PLANNED_END": "datetime",
 
     "EPIC_ESTIMATE": "float",
     "EPIC_OPEN_ESTIMATE": "float",

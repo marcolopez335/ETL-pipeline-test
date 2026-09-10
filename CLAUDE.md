@@ -27,6 +27,11 @@ tests in `tests/`.
 - **The summary owns today.** `shared.drop_todays_history` removes history
   rows dated today before the union; `fill_missing_snapshots` never
   synthesizes today. The cache still keeps the official snapshot.
+- **EPICS date names are the workbook's, not the database's.** In the epic
+  queries `TARGET_START AS PLANNED_START` and `TARGET_END AS PLANNED_END`
+  (feature level, present in both tables), while `BASELINE_PLANNED_END`
+  is the database `PLANNED_END`. It reads backwards on purpose; do not
+  "correct" it.
 - **Baseline columns come from the summary.** The history table has no
   `PLANNED_END`; the history queries select `NULL AS BASELINE_PLANNED_END`
   and `epics_table.carry_baseline_from_summary` fills each snapshot row

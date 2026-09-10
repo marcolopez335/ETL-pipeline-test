@@ -21,6 +21,8 @@ Features As (
         SWAG AS FEATURE_SWAG,
         PROGRAM_PRIORITY AS BV,
         FIX_VERSION AS FEATURE_FIX_VERSION,
+        TARGET_START AS PLANNED_START,   -- workbook naming: the target dates are the "planned" dates
+        TARGET_END AS PLANNED_END,
         NULL AS BASELINE_PLANNED_END   -- not in AMMM_JIRA_EPIC_HISTORY; the build fills it per feature from the summary
     FROM AMMM_JIRA_EPIC_HISTORY
     WHERE ISSUE_TYPE = 'Feature'
@@ -64,6 +66,8 @@ SELECT
     FT.FEATURE_SWAG,
     FT.BV,
     FT.FEATURE_FIX_VERSION,
+    FT.PLANNED_START,
+    FT.PLANNED_END,
     FT.BASELINE_PLANNED_END,
     EP.EPIC_KEY,
     EP.EPIC_SUMMARY,

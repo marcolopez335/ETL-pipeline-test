@@ -25,6 +25,7 @@ Filenames are legacy and abbreviated in places (`A*` = agile/story data,
 - `EpicSummary.sql` — Current epic hierarchy (CTE per level, flattened onto the epic row; `sql_summary`)
 - `EpicHistory.sql` — Full epic snapshot history, no date window; seeds the cache (`sql_history_full`)
 - `EpicHistory_recent.sql` — Last 30 days of epic snapshots (`sql_history_recent`)
+- Feature dates use the workbook's names on purpose, even though they read backwards: `TARGET_START AS PLANNED_START` and `TARGET_END AS PLANNED_END` (both tables have the target dates), while `BASELINE_PLANNED_END` is the database `PLANNED_END`
 - Both history queries select `NULL AS BASELINE_PLANNED_END` — `AMMM_JIRA_EPIC_HISTORY` has no `PLANNED_END`; the epics build fills it per feature from `EpicSummary.sql`
 - `AgileHistory.sql` — Story-point rollups per feature and snapshot
 - `AgileSummary.sql` — Story-point rollups per feature (current)
