@@ -350,8 +350,8 @@ def test_drop_todays_history_prevents_double_count() -> None:
 
 
 def test_sprint_lookup_guards() -> None:
-    """Epics sprint lookups: only a PI's own sprints, one current sprint per
-    PI, unparseable names ignored (not "0.0.0"), no row fan-out downstream."""
+    """Epics sprint lookups: only a PI's own sprints, unparseable names
+    ignored (not "0.0.0"), no row fan-out downstream, no current sprint."""
     from conversion.epics_table import apply_transforms, build_sprint_lookups
 
     now = datetime.now()
@@ -368,15 +368,12 @@ def test_sprint_lookup_guards() -> None:
                      now + 9 * day, now + 74 * day],
     })
     history = sprints.head(0).with_columns(pl.lit(now.date()).alias("SNAPSHOT_DATE"))
-    hist_lookup, sum_lookup, cur_hist, cur_sum = build_sprint_lookups(history, sprints)
+    hist_lookup, sum_lookup = build_sprint_lookups(history, sprints)
 
     pi1 = sum_lookup.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.1")
     pi1_range = (pi1["MIN_SPRINT"].item(), pi1["MAX_SPRINT"].item())
     check("sprint guard: PI 26.1 range stays inside 26.1",
           pi1_range == ("26.1.1", "26.1.IP"), detail=str(pi1_range))
-    cur1 = cur_sum.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.1")["CURRENT_SPRINT"].to_list()
-    check("sprint guard: exactly one current sprint for PI 26.1",
-          cur1 == ["26.1.IP"], detail=str(cur1))
     pi3 = sum_lookup.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.3")
     pi3_range = (pi3["MIN_SPRINT"].item(), pi3["MAX_SPRINT"].item())
     check("sprint guard: unparseable sprint name gives a null range, not 0.0.0",
@@ -386,12 +383,12 @@ def test_sprint_lookup_guards() -> None:
         "EPIC_KEY": ["E1"], "FEATURE_KEY": ["F1"], "PROGRAM_INCREMENT": ["PI 26.1"],
         "SNAPSHOT_DATE": pl.Series([None], dtype=pl.Date),
     })
-    out = apply_transforms(epics, hist_lookup, sum_lookup, cur_hist, cur_sum)
+    out = apply_transforms(epics, hist_lookup, sum_lookup)
     check("sprint guard: apply_transforms keeps one row per epic (no fan-out)",
           out.height == 1, detail=f"rows={out.height}")
-    check("sprint guard: sprint columns come from the PI's own sprints",
-          (out["Current Sprint"].item(), out["Max Sprint"].item()) == ("26.1.IP", "26.1.IP"),
-          detail=f"{out['Current Sprint'].item()} / {out['Max Sprint'].item()}")
+    check("sprint guard: no Current Sprint column; Max Sprint from the PI's own sprints",
+          "Current Sprint" not in out.columns and out["Max Sprint"].item() == "26.1.IP",
+          detail=f"sprint cols={[c for c in out.columns if 'Sprint' in c]}")
 
 
 def test_decode_sql_text_tolerates_windows_bytes() -> None:
