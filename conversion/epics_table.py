@@ -119,9 +119,25 @@ def _compute_sprint_range(df: pl.DataFrame, partition_cols: list[str] | None = N
 
 
 def _build_sprint_lookup(df: pl.DataFrame, partition_cols: list[str]) -> pl.DataFrame:
-    """Compute MIN_SPRINT / MAX_SPRINT from sprint name data and collapse to lookup."""
+    """MIN_SPRINT / MAX_SPRINT plus SPRINT_NAMES per partition, one row each.
+
+    SPRINT_NAMES lists the distinct sprint names the range was built from,
+    in sprint order (unparseable names last), joined with ", " -- the raw
+    input the sprint columns are derived from, visible on every epic row.
+    """
     df = _compute_sprint_range(df, partition_cols=partition_cols)
-    lookup = df.select(partition_cols + ["MIN_SPRINT", "MAX_SPRINT"]).unique()
+    names = (
+        df.filter(pl.col("SPRINT_NAME").is_not_null())
+        .with_columns(_sprint_sort_key().alias("_key"))
+        .sort(["_key", "SPRINT_NAME"], nulls_last=True)
+        .group_by(partition_cols, maintain_order=True)
+        .agg(pl.col("SPRINT_NAME").cast(pl.Utf8).unique(maintain_order=True).alias("SPRINT_NAMES"))
+        .with_columns(pl.col("SPRINT_NAMES").list.join(", "))
+    )
+    lookup = (
+        df.select(partition_cols + ["MIN_SPRINT", "MAX_SPRINT"]).unique()
+        .join(names, on=partition_cols, how="left")
+    )
     logger.info(f"Sprint range lookup ({partition_cols}): {lookup.height} rows")
     return lookup
 
@@ -213,7 +229,8 @@ def apply_transforms(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
     df = df.with_columns([
         pl.coalesce(["MIN_SPRINT", "MIN_SPRINT_sum"]).alias("MIN_SPRINT"),
         pl.coalesce(["MAX_SPRINT", "MAX_SPRINT_sum"]).alias("MAX_SPRINT"),
-    ]).drop(["MIN_SPRINT_sum", "MAX_SPRINT_sum"])
+        pl.coalesce(["SPRINT_NAMES", "SPRINT_NAMES_sum"]).alias("SPRINT_NAMES"),
+    ]).drop(["MIN_SPRINT_sum", "MAX_SPRINT_sum", "SPRINT_NAMES_sum"])
 
     return rename_to_title_case(df)
 

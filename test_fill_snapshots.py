@@ -374,10 +374,15 @@ def test_sprint_lookup_guards() -> None:
     pi1_range = (pi1["MIN_SPRINT"].item(), pi1["MAX_SPRINT"].item())
     check("sprint guard: PI 26.1 range stays inside 26.1",
           pi1_range == ("26.1.1", "26.1.IP"), detail=str(pi1_range))
+    names = pi1["SPRINT_NAMES"].item()
+    check("sprint names: the PI's own sprints in sprint order, stray sprint excluded",
+          names == "AMMM 26.1.1, AMMM 26.1.2, AMMM 26.1.IP", detail=str(names))
     pi3 = sum_lookup.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.3")
     pi3_range = (pi3["MIN_SPRINT"].item(), pi3["MAX_SPRINT"].item())
     check("sprint guard: unparseable sprint name gives a null range, not 0.0.0",
           pi3_range == (None, None), detail=str(pi3_range))
+    check("sprint names: an unparseable sprint name is still visible",
+          pi3["SPRINT_NAMES"].item() == "AMMM 26.3.1 (extended)", detail=str(pi3["SPRINT_NAMES"].item()))
 
     epics = pl.DataFrame({
         "EPIC_KEY": ["E1"], "FEATURE_KEY": ["F1"], "PROGRAM_INCREMENT": ["PI 26.1"],
@@ -389,6 +394,9 @@ def test_sprint_lookup_guards() -> None:
     check("sprint guard: no Current Sprint column; Max Sprint from the PI's own sprints",
           "Current Sprint" not in out.columns and out["Max Sprint"].item() == "26.1.IP",
           detail=f"sprint cols={[c for c in out.columns if 'Sprint' in c]}")
+    check("sprint names: Sprint Names reaches the epic row",
+          out["Sprint Names"].item() == "AMMM 26.1.1, AMMM 26.1.2, AMMM 26.1.IP",
+          detail=str(out["Sprint Names"].item()))
 
 
 def test_decode_sql_text_tolerates_windows_bytes() -> None:
