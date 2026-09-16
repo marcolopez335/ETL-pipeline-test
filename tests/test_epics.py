@@ -1,12 +1,13 @@
 """Epics build chain on in-memory frames: agile joins, union, sprint lookups, ACRP."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import polars as pl
 
 from conversion.epics_table import (
     _sort_key_to_version,
     _sprint_sort_key,
+    apply_transforms,
     build_acrp,
     build_epics,
     build_sprint_lookups,
@@ -202,6 +203,12 @@ def test_sprint_sort_key_orders_ip_last_and_round_trips():
     assert df.select(_sort_key_to_version("k", "v"))["v"].to_list() == versions
 
 
+def test_sprint_sort_key_is_null_for_unparseable_versions():
+    df = pl.DataFrame({"SPRINT_VERSION": [None, "26.1.x", "26.1"]}).with_columns(_sprint_sort_key().alias("k"))
+    assert df["k"].to_list() == [None, None, None]
+    assert df.select(_sort_key_to_version("k", "v"))["v"].to_list() == [None, None, None]
+
+
 def test_baseline_planned_end_is_carried_onto_snapshot_rows():
     """The history table has no PLANNED_END (the history SQL selects NULL), so
     every snapshot row takes its feature's current value from the summary:
@@ -257,3 +264,71 @@ def test_planned_dates_are_per_snapshot_unlike_the_baseline():
     assert df.schema["Planned End"] == pl.Datetime("us")
 
     assert {"PLANNED_START", "PLANNED_END", "BASELINE_PLANNED_END"} <= set(acrp.columns)
+
+
+def _no_history(sprints: pl.DataFrame) -> pl.DataFrame:
+    return sprints.head(0).with_columns(pl.lit(PRIOR).alias("SNAPSHOT_DATE"))
+
+
+def test_sprint_lookups_ignore_sprints_that_belong_to_another_pi():
+    """One story tagged "PI 26.1" but worked in sprint 26.2.1 must not drag
+    26.2.1 into PI 26.1's sprint range, nor become a second current sprint
+    (which would fan the epic row out in apply_transforms)."""
+    stray = pl.DataFrame({
+        "PROGRAM_INCREMENT": ["PI 26.1"], "SPRINT_NAME": ["AMMM 26.2.1"],
+        "BEGIN_DATE": [datetime(2026, 4, 1)], "END_DATE": [datetime(2026, 4, 30)],   # contains TODAY
+    })
+    sprints = sprint_range_summary_frame().vstack(stray)
+    lookups = build_sprint_lookups(_no_history(sprints), sprints, today=TODAY)
+
+    pi1 = lookups.range_summary.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.1")
+    assert (pi1["MIN_SPRINT"].item(), pi1["MAX_SPRINT"].item()) == ("26.1.1", "26.1.IP")
+    assert lookups.current_summary.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.1")["CURRENT_SPRINT"].to_list() == ["26.1.2"]
+    # the sprint still counts for its own PI
+    assert lookups.range_summary.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.2")["MAX_SPRINT"].item() == "26.2.1"
+
+
+def test_current_sprint_is_one_row_per_pi_when_sprint_dates_overlap():
+    sprints = pl.DataFrame({
+        "PROGRAM_INCREMENT": ["PI 26.1", "PI 26.1"],
+        "SPRINT_NAME": ["Team A 26.1.2", "Team B 26.1.IP"],      # hand-entered dates overlap on Apr 15
+        "BEGIN_DATE": [datetime(2026, 4, 1), datetime(2026, 4, 15)],
+        "END_DATE": [datetime(2026, 4, 15), datetime(2026, 4, 28)],
+    })
+    history = sprints.with_columns(pl.lit(PRIOR).alias("SNAPSHOT_DATE"))
+    lookups = build_sprint_lookups(history, sprints, today=date(2026, 4, 15))
+
+    assert lookups.current_summary.to_dicts() == [{"PROGRAM_INCREMENT": "PI 26.1", "CURRENT_SPRINT": "26.1.IP"}]
+    assert lookups.current_history.height == 1
+    assert lookups.current_history["CURRENT_SPRINT"].item() == "26.1.IP"   # the later sprint wins
+
+
+def test_unparseable_sprint_names_are_ignored_not_zeroed():
+    sprints = pl.DataFrame({
+        "PROGRAM_INCREMENT": ["PI 26.3", "PI 26.3", "PI 26.4"],
+        "SPRINT_NAME": ["AMMM 26.3.1", "AMMM 26.3.2 (extended)", "AMMM 26.4.1 (extended)"],
+        "BEGIN_DATE": [datetime(2026, 7, 1)] * 3,
+        "END_DATE": [datetime(2026, 7, 14)] * 3,
+    })
+    lookups = build_sprint_lookups(_no_history(sprints), sprints, today=TODAY)
+    by_pi = {r["PROGRAM_INCREMENT"]: r for r in lookups.range_summary.to_dicts()}
+    assert (by_pi["PI 26.3"]["MIN_SPRINT"], by_pi["PI 26.3"]["MAX_SPRINT"]) == ("26.3.1", "26.3.1")
+    assert (by_pi["PI 26.4"]["MIN_SPRINT"], by_pi["PI 26.4"]["MAX_SPRINT"]) == (None, None)   # not "0.0.0"
+
+
+def test_apply_transforms_never_fans_out_on_a_polluted_sprint_table():
+    """End to end: a stray sprint that contains today used to duplicate the epic row."""
+    stray = pl.DataFrame({
+        "PROGRAM_INCREMENT": ["PI 26.1"], "SPRINT_NAME": ["AMMM 26.2.1"],
+        "BEGIN_DATE": [datetime(2026, 4, 1)], "END_DATE": [datetime(2026, 4, 30)],
+    })
+    sprints = sprint_range_summary_frame().vstack(stray)
+    lookups = build_sprint_lookups(_no_history(sprints), sprints, today=TODAY)
+    epics = pl.DataFrame({
+        "EPIC_KEY": ["E1"], "FEATURE_KEY": ["F1"], "PROGRAM_INCREMENT": ["PI 26.1"],
+        "SNAPSHOT_DATE": pl.Series([None], dtype=pl.Date),
+    })
+    out = apply_transforms(epics, lookups, now=NOW)
+    assert out.height == 1
+    assert out.row(0, named=True)["CURRENT_SPRINT"] == "26.1.2"
+    assert out.row(0, named=True)["MAX_SPRINT"] == "26.1.IP"

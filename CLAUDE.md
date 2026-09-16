@@ -21,7 +21,8 @@ tests in `tests/`.
   flattened onto the row (Epic → Feature → Sub-Capability → Customer
   Capability → Customer Epic), ⟕ agile rollups (story points per feature per
   PI — this sets the grain to epic × PI × snapshot), ⟕ sprint lookups
-  (min / max / current sprint). Also produces **ACRP** (summary rows only,
+  (min / max / current sprint; only sprints whose version belongs to the
+  row's PI, one current sprint per PI, unparseable names ignored). Also produces **ACRP** (summary rows only,
   one per fix version, min/max target release per feature) and the
   **feature burn-up**. `conversion/epics_table.py`, `conversion/burnup_table.py`.
 - **The summary owns today.** `shared.drop_todays_history` removes history

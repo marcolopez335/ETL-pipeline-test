@@ -709,6 +709,8 @@ def drop_todays_history(df_history: pl.DataFrame, today: date | None = None) -> 
 # name like "AMMM 26.1.IP". Note the second dot is unescaped (matches any
 # character) — kept as-is to preserve the historical match behavior.
 SPRINT_VERSION_PATTERN = r"(\d{2}\.\d.\w+)"
+# The PI is the first 4 characters of a sprint version: "26.1" from "26.1.IP"
+PI_PREFIX_LENGTH = 4
 
 
 def rename_to_title_case(df: pl.DataFrame) -> pl.DataFrame:

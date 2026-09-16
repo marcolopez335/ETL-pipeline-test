@@ -36,7 +36,7 @@ from schemas.datatypes import EXPECTED_DTYPES_STORIES
 # get_logger comes via shared so this module imports (and its tests run)
 # without the proprietary csm_commonlib package
 from conversion.shared import (
-    JOIN_NULLS_KWARG, OUTPUT_DIR, SPRINT_VERSION_PATTERN, clean_dtypes,
+    JOIN_NULLS_KWARG, OUTPUT_DIR, PI_PREFIX_LENGTH, SPRINT_VERSION_PATTERN, clean_dtypes,
     drop_todays_history, export_hyper, fill_missing_snapshots, get_cache_path,
     get_logger, history_fetch_plan, log_dataframe_summary, parallel_fetch,
     publish_hyper, rename_to_title_case, run_query, union_data, update_history,
@@ -55,8 +55,6 @@ FEATURE_JOIN_KEYS = ["FEATURE_ID", "SNAPSHOT_DATE"]
 # Suffix for feature columns that collide with story columns (TARGET_START /
 # TARGET_END). Historical name -- the workbooks reference "Target Start Epics".
 FEATURE_SUFFIX = "_epics"
-# PI is the first 4 chars of the extracted sprint version: "26.1" from "26.1.IP"
-PI_PREFIX_LENGTH = 4
 
 
 # ---------------------------------------------------------------------------

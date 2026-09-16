@@ -59,7 +59,7 @@ from conversion.console import print_header, print_pipeline_complete, step_spinn
 # get_logger comes via shared so this module imports (and its tests run)
 # without the proprietary csm_commonlib package
 from conversion.shared import (
-    OUTPUT_DIR, SPRINT_VERSION_PATTERN, clean_dtypes, drop_todays_history,
+    OUTPUT_DIR, PI_PREFIX_LENGTH, SPRINT_VERSION_PATTERN, clean_dtypes, drop_todays_history,
     export_hyper, fill_missing_snapshots, get_cache_path, get_logger,
     history_fetch_plan, log_dataframe_summary, parallel_fetch, publish_hyper,
     rename_to_title_case, run_query, union_data, update_history,
@@ -93,26 +93,32 @@ IP_SPRINT_SORT_VALUE = 99
 # used for the min/max sprint range; the looser SPRINT_VERSION_PATTERN from
 # shared is used for CURRENT_SPRINT (same parse as the stories' SPRINT_NAME_ALT).
 SPRINT_VERSION_REGEX = r"(\d{2,4}\.\d+\.(?:\d+|IP))\s*$"
+# The PI number inside a PROGRAM_INCREMENT value ("PI 26.1" -> "26.1"). The
+# same "26.1" is the first PI_PREFIX_LENGTH characters of a sprint version,
+# which is how a sprint is matched to the PI it belongs to.
+PI_NUMBER_PATTERN = r"(\d{2}\.\d)"
 
 
 # ---------------------------------------------------------------------------
 # Sprint parsing & lookups
 # ---------------------------------------------------------------------------
 
-def _sprint_sort_key() -> pl.Expr:
-    """Parse SPRINT_VERSION (e.g. '26.1.2' or '26.1.IP') into a sortable integer.
+def _sprint_sort_key(version_col: str = "SPRINT_VERSION") -> pl.Expr:
+    """Parse a sprint version ('26.1.2', '26.1.IP') into a sortable integer, or null.
 
     Key = year * 10000 + pi * 100 + sprint, where IP = 99.
-    Example: '26.1.2' -> 260102, '26.1.IP' -> 260199
+    Example: '26.1.2' -> 260102, '26.1.IP' -> 260199. A version that does
+    not parse (null, or a non-numeric part) yields null, so min/max simply
+    ignore it instead of treating it as sprint 0.0.0.
     """
-    version = pl.col("SPRINT_VERSION").str.split(".")
-    major = version.list.get(0).cast(pl.Int64, strict=False).fill_null(0) % 100
-    minor = version.list.get(1).cast(pl.Int64, strict=False).fill_null(0)
-    patch_str = version.list.get(2)
+    version = pl.col(version_col).str.split(".")
+    major = version.list.get(0, null_on_oob=True).cast(pl.Int64, strict=False) % 100
+    minor = version.list.get(1, null_on_oob=True).cast(pl.Int64, strict=False)
+    patch_str = version.list.get(2, null_on_oob=True)
     patch = (
         pl.when(patch_str == IP_SPRINT_LABEL)
         .then(pl.lit(IP_SPRINT_SORT_VALUE))
-        .otherwise(patch_str.cast(pl.Int64, strict=False).fill_null(0))
+        .otherwise(patch_str.cast(pl.Int64, strict=False))
     )
     return major * 10000 + minor * 100 + patch
 
@@ -199,6 +205,22 @@ def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str],
         (ref >= pl.col("BEGIN_DATE")) & (ref <= pl.col("END_DATE"))
     ).select(partition_cols + ["CURRENT_SPRINT"]).unique()
 
+    # One current sprint per partition, guaranteed. Sprint dates are entered
+    # by hand and can overlap on the reference day; keep the latest version
+    # so the join in apply_transforms can never fan a row out.
+    candidates = lookup.height
+    lookup = (
+        lookup.with_columns(_sprint_sort_key("CURRENT_SPRINT").alias("_key"))
+        .sort("_key", nulls_last=False)
+        .unique(subset=partition_cols, keep="last", maintain_order=True)
+        .drop("_key")
+    )
+    if lookup.height < candidates:
+        logger.info(
+            f"Current sprint: {candidates - lookup.height} overlapping sprint(s) "
+            f"collapsed to the latest per partition"
+        )
+
     logger.info(f"Current sprint lookup ({partition_cols}): {lookup.height} rows")
     return lookup
 
@@ -212,13 +234,48 @@ class SprintLookups:
     current_summary: pl.DataFrame  # PROGRAM_INCREMENT -> CURRENT_SPRINT
 
 
+def _sprints_in_their_own_pi(df: pl.DataFrame) -> pl.DataFrame:
+    """Drop sprint-range rows whose sprint belongs to a different PI than the row says.
+
+    The sprint range queries pair each story's PROGRAM_INCREMENT tag with
+    the sprint the story sits in. One story tagged "PI 26.1" but worked in
+    sprint 26.2.1 would otherwise make 26.2.1 part of PI 26.1's range, and
+    a second current sprint for it. A row is kept when the PI parsed from
+    its sprint name matches the PI number in PROGRAM_INCREMENT, or when
+    either side cannot be parsed (no basis to judge).
+    """
+    pi_from_tag = pl.col("PROGRAM_INCREMENT").cast(pl.Utf8).str.extract(PI_NUMBER_PATTERN)
+    pi_from_sprint = (
+        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_VERSION_PATTERN)
+        .str.slice(0, PI_PREFIX_LENGTH)
+    )
+    keep = pi_from_tag.is_null() | pi_from_sprint.is_null() | (pi_from_tag == pi_from_sprint)
+    kept = df.filter(keep)
+    dropped = df.height - kept.height
+    if dropped:
+        examples = (
+            df.filter(~keep).select(["PROGRAM_INCREMENT", "SPRINT_NAME"]).unique().head(5).rows()
+        )
+        logger.warning(
+            f"Sprint range: ignored {dropped} row(s) whose sprint belongs to another PI "
+            f"(a story's PI tag disagrees with its sprint), e.g. {examples}"
+        )
+    return kept
+
+
 def build_sprint_lookups(df_hist: pl.DataFrame, df_sum: pl.DataFrame,
                          today: date | None = None) -> SprintLookups:
-    """Build the four sprint lookups from the sprint range query results."""
+    """Build the four sprint lookups from the sprint range query results.
+
+    Only sprints that belong to the row's own PI take part, and the current
+    sprint lookups hold exactly one sprint per partition.
+    """
     if today is None:
         today = datetime.now().date()
     # History is keyed per snapshot day
     df_hist = df_hist.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
+    df_hist = _sprints_in_their_own_pi(df_hist)
+    df_sum = _sprints_in_their_own_pi(df_sum)
     return SprintLookups(
         range_history=_build_sprint_lookup(df_hist, SPRINT_PARTITION_HISTORY),
         range_summary=_build_sprint_lookup(df_sum, SPRINT_PARTITION_SUMMARY),
