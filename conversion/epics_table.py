@@ -1,10 +1,11 @@
 import time
 from datetime import datetime
 import polars as pl
-from common.logging import get_logger
 from schemas.datatypes import EXPECTED_DTYPES_EPICS
+# get_logger comes via shared so this module stays importable (and testable)
+# without the proprietary `common` package, like stories_table and burnup_table
 from conversion.shared import (
-    OUTPUT_DIR, SPRINT_VERSION_PATTERN, get_cache_path, run_query, clean_dtypes,
+    OUTPUT_DIR, SPRINT_VERSION_PATTERN, get_cache_path, get_logger, run_query, clean_dtypes,
     update_history, union_data, export_hyper, log_dataframe_summary,
     publish_hyper, fill_missing_snapshots, history_fetch_plan, parallel_fetch,
     rename_to_snake_case, rename_to_title_case,
@@ -26,22 +27,29 @@ IP_SPRINT_SORT_VALUE = 99
 # used for the min/max sprint range; the looser SPRINT_VERSION_PATTERN from
 # shared is used for CURRENT_SPRINT.
 SPRINT_VERSION_REGEX = r"(\d{2,4}\.\d+\.(?:\d+|IP))\s*$"
+# The PI number inside a PROGRAM_INCREMENT value ("PI 26.1" -> "26.1"). The
+# same "26.1" is the first PI_PREFIX_LENGTH characters of a sprint version
+# ("26.1.2", "26.1.IP"), which is how a sprint is matched to its own PI.
+PI_NUMBER_PATTERN = r"(\d{2}\.\d)"
+PI_PREFIX_LENGTH = 4  # same prefix stories_table uses for PI_FROM_SPRINT
 
 
-def _sprint_sort_key() -> pl.Expr:
-    """Parse sprint version (e.g. '26.1.2' or '26.1.IP') into a sortable integer.
+def _sprint_sort_key(version_col: str = "SPRINT_VERSION") -> pl.Expr:
+    """Parse a sprint version ('26.1.2', '26.1.IP') into a sortable integer, or null.
 
     Key = year * 10000 + pi * 100 + sprint, where IP = 99.
-    Example: '26.1.2' -> 260102, '26.1.IP' -> 260199
+    Example: '26.1.2' -> 260102, '26.1.IP' -> 260199. A version that does
+    not parse (null, or a non-numeric part) yields null, so min/max simply
+    ignore it instead of treating it as sprint 0.0.0.
     """
-    version = pl.col("SPRINT_VERSION").str.split(".")
-    major = version.list.get(0).cast(pl.Int64, strict=False).fill_null(0) % 100
-    minor = version.list.get(1).cast(pl.Int64, strict=False).fill_null(0)
-    patch_str = version.list.get(2)
+    version = pl.col(version_col).str.split(".")
+    major = version.list.get(0, null_on_oob=True).cast(pl.Int64, strict=False) % 100
+    minor = version.list.get(1, null_on_oob=True).cast(pl.Int64, strict=False)
+    patch_str = version.list.get(2, null_on_oob=True)
     patch = (
         pl.when(patch_str == IP_SPRINT_LABEL)
         .then(pl.lit(IP_SPRINT_SORT_VALUE))
-        .otherwise(patch_str.cast(pl.Int64, strict=False).fill_null(0))
+        .otherwise(patch_str.cast(pl.Int64, strict=False))
     )
     return major * 10000 + minor * 100 + patch
 
@@ -122,8 +130,8 @@ def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str],
                                  reference_date) -> pl.DataFrame:
     """Build a lookup of CURRENT_SPRINT per partition.
 
-    Pre-filters to the sprint whose BEGIN_DATE–END_DATE contains reference_date,
-    so the result has at most one row per partition (no fan-out on join).
+    Filters to the sprints whose BEGIN_DATE–END_DATE contains reference_date,
+    then keeps exactly one per partition so the join can never fan out.
     """
     lookup = df.with_columns(
         pl.col("SPRINT_NAME")
@@ -145,8 +153,53 @@ def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str],
         (ref >= pl.col("BEGIN_DATE")) & (ref <= pl.col("END_DATE"))
     ).select(partition_cols + ["CURRENT_SPRINT"]).unique()
 
+    # Enforce one current sprint per partition. Sprint dates are entered by
+    # hand and can overlap on the reference day; keep the latest version so
+    # the join in apply_transforms can never duplicate an epic row.
+    candidates = lookup.height
+    lookup = (
+        lookup.with_columns(_sprint_sort_key("CURRENT_SPRINT").alias("_key"))
+        .sort("_key", nulls_last=False)
+        .unique(subset=partition_cols, keep="last", maintain_order=True)
+        .drop("_key")
+    )
+    if lookup.height < candidates:
+        logger.info(
+            f"Current sprint: {candidates - lookup.height} overlapping sprint(s) "
+            f"collapsed to the latest per partition"
+        )
+
     logger.info(f"Current sprint lookup ({partition_cols}): {lookup.height} rows")
     return lookup
+
+
+def _sprints_in_their_own_pi(df: pl.DataFrame) -> pl.DataFrame:
+    """Drop sprint-range rows whose sprint belongs to a different PI than the row says.
+
+    The sprint range queries pair each story's PROGRAM_INCREMENT tag with
+    the sprint the story sits in. One story tagged "PI 26.1" but worked in
+    sprint 26.2.1 would otherwise make 26.2.1 part of PI 26.1's range, and
+    a second current sprint for it. A row is kept when the PI parsed from
+    its sprint name matches the PI number in PROGRAM_INCREMENT, or when
+    either side cannot be parsed (no basis to judge).
+    """
+    pi_from_tag = pl.col("PROGRAM_INCREMENT").cast(pl.Utf8).str.extract(PI_NUMBER_PATTERN)
+    pi_from_sprint = (
+        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_VERSION_PATTERN)
+        .str.slice(0, PI_PREFIX_LENGTH)
+    )
+    keep = pi_from_tag.is_null() | pi_from_sprint.is_null() | (pi_from_tag == pi_from_sprint)
+    kept = df.filter(keep)
+    dropped = df.height - kept.height
+    if dropped:
+        examples = (
+            df.filter(~keep).select(["PROGRAM_INCREMENT", "SPRINT_NAME"]).unique().head(5).rows()
+        )
+        logger.warning(
+            f"Sprint range: ignored {dropped} row(s) whose sprint belongs to another PI "
+            f"(a story's PI tag disagrees with its sprint), e.g. {examples}"
+        )
+    return kept
 
 
 def build_sprint_lookups(
@@ -155,12 +208,16 @@ def build_sprint_lookups(
     """Build sprint range lookups from already-fetched sprint range data.
 
     Returns (history_lookup, summary_lookup, current_sprint_hist, current_sprint_sum).
+    Only sprints that belong to the row's own PI take part, and the current
+    sprint lookups hold exactly one sprint per partition.
     """
     today = datetime.now().date()
 
     # History: keyed by SNAPSHOT_DATE + PROGRAM_INCREMENT
     if "SNAPSHOT_DATE" in df_hist.columns:
         df_hist = df_hist.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
+    df_hist = _sprints_in_their_own_pi(df_hist)
+    df_sum = _sprints_in_their_own_pi(df_sum)
     history_lookup = _build_sprint_lookup(df_hist, SPRINT_PARTITION)
     current_sprint_hist = _build_current_sprint_lookup(df_hist, SPRINT_PARTITION, today)
 

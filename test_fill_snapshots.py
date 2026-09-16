@@ -349,6 +349,51 @@ def test_drop_todays_history_prevents_double_count() -> None:
           prior["Feature Status"].null_count() == 0)
 
 
+def test_sprint_lookup_guards() -> None:
+    """Epics sprint lookups: only a PI's own sprints, one current sprint per
+    PI, unparseable names ignored (not "0.0.0"), no row fan-out downstream."""
+    from conversion.epics_table import apply_transforms, build_sprint_lookups
+
+    now = datetime.now()
+    day = timedelta(days=1)
+    # One story tagged "PI 26.1" sits in sprint 26.2.1 (the stray row); that
+    # sprint and 26.1.IP both contain today. "(extended)" cannot be parsed.
+    sprints = pl.DataFrame({
+        "PROGRAM_INCREMENT": ["PI 26.1", "PI 26.1", "PI 26.1", "PI 26.1", "PI 26.2", "PI 26.3"],
+        "SPRINT_NAME": ["AMMM 26.1.1", "AMMM 26.1.2", "AMMM 26.1.IP", "AMMM 26.2.1",
+                        "AMMM 26.2.1", "AMMM 26.3.1 (extended)"],
+        "BEGIN_DATE": [now - 40 * day, now - 25 * day, now - 10 * day, now - 5 * day,
+                       now - 5 * day, now + 60 * day],
+        "END_DATE": [now - 26 * day, now - 11 * day, now + 4 * day, now + 9 * day,
+                     now + 9 * day, now + 74 * day],
+    })
+    history = sprints.head(0).with_columns(pl.lit(now.date()).alias("SNAPSHOT_DATE"))
+    hist_lookup, sum_lookup, cur_hist, cur_sum = build_sprint_lookups(history, sprints)
+
+    pi1 = sum_lookup.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.1")
+    pi1_range = (pi1["MIN_SPRINT"].item(), pi1["MAX_SPRINT"].item())
+    check("sprint guard: PI 26.1 range stays inside 26.1",
+          pi1_range == ("26.1.1", "26.1.IP"), detail=str(pi1_range))
+    cur1 = cur_sum.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.1")["CURRENT_SPRINT"].to_list()
+    check("sprint guard: exactly one current sprint for PI 26.1",
+          cur1 == ["26.1.IP"], detail=str(cur1))
+    pi3 = sum_lookup.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.3")
+    pi3_range = (pi3["MIN_SPRINT"].item(), pi3["MAX_SPRINT"].item())
+    check("sprint guard: unparseable sprint name gives a null range, not 0.0.0",
+          pi3_range == (None, None), detail=str(pi3_range))
+
+    epics = pl.DataFrame({
+        "EPIC_KEY": ["E1"], "FEATURE_KEY": ["F1"], "PROGRAM_INCREMENT": ["PI 26.1"],
+        "SNAPSHOT_DATE": pl.Series([None], dtype=pl.Date),
+    })
+    out = apply_transforms(epics, hist_lookup, sum_lookup, cur_hist, cur_sum)
+    check("sprint guard: apply_transforms keeps one row per epic (no fan-out)",
+          out.height == 1, detail=f"rows={out.height}")
+    check("sprint guard: sprint columns come from the PI's own sprints",
+          (out["Current Sprint"].item(), out["Max Sprint"].item()) == ("26.1.IP", "26.1.IP"),
+          detail=f"{out['Current Sprint'].item()} / {out['Max Sprint'].item()}")
+
+
 def test_decode_sql_text_tolerates_windows_bytes() -> None:
     # Plain UTF-8 passes through unchanged
     check("decode: clean utf-8 unchanged",
@@ -406,6 +451,7 @@ def test_configure_result_encoding_is_safe() -> None:
 def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
     test_drop_todays_history_prevents_double_count()
+    test_sprint_lookup_guards()
     test_decode_sql_text_tolerates_windows_bytes()
     test_configure_result_encoding_is_safe()
     test_supertype_rules()
