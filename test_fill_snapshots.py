@@ -399,6 +399,54 @@ def test_sprint_lookup_guards() -> None:
           detail=str(out["Sprint Names"].item()))
 
 
+def test_feature_pi_counts_features_by_their_own_pi() -> None:
+    """PROGRAM_INCREMENT on an epic row comes from the feature's stories, so a
+    feature appears under every PI any of its stories is tagged with. Counting
+    features by that column overcounts; FEATURE_PI (the feature's own field)
+    must pass through untouched so Tableau can count by it instead."""
+    from conversion.epics_table import apply_transforms, build_sprint_lookups, join_agile
+    from conversion.shared import union_data
+
+    # 10 Done features whose own PI is 26.1, plus a 26.2 feature with one
+    # stale-tagged story and a 25.4 feature with one story carried into 26.1
+    keys = [f"F{i:02d}" for i in range(1, 11)] + ["F11", "F12"]
+    epics = pl.DataFrame({
+        "EPIC_KEY": ["E-" + k for k in keys], "FEATURE_KEY": keys,
+        "FEATURE_PI": ["PI 26.1"] * 10 + ["PI 26.2", "PI 25.4"],
+        "FEATURE_STATUS": ["Done"] * 12, "FEATURE_TEAM": ["Team A"] * 12,
+    })
+    rollup = pl.DataFrame({
+        "FEATURE_ID": keys + ["F11", "F12"],
+        "PROGRAM_INCREMENT": ["PI 26.1"] * 10 + ["PI 26.2", "PI 25.4", "PI 26.1", "PI 26.1"],
+        "TOTAL_ESTIMATE": [8.0] * 10 + [5.0, 8.0, 2.0, 1.0],
+        "SPRINT_COUNT": [2] * 10 + [1, 1, 1, 1],
+    })
+    sprints = pl.DataFrame({
+        "PROGRAM_INCREMENT": ["PI 26.1", "PI 26.2", "PI 25.4"],
+        "SPRINT_NAME": ["AMMM 26.1.2", "AMMM 26.2.1", "AMMM 25.4.5"],
+        "BEGIN_DATE": [datetime(2026, 4, 1), datetime(2026, 5, 1), datetime(2026, 3, 4)],
+        "END_DATE": [datetime(2026, 4, 14), datetime(2026, 5, 14), datetime(2026, 3, 17)],
+    })
+    no_snapshot = pl.lit(None).cast(pl.Date).alias("SNAPSHOT_DATE")
+    df = join_agile(epics, rollup, has_snapshot=False)
+    df = union_data(df, df.head(0).with_columns(no_snapshot))
+    hist_lookup, sum_lookup = build_sprint_lookups(sprints.head(0).with_columns(no_snapshot), sprints)
+    out = apply_transforms(df, hist_lookup, sum_lookup)
+
+    by_story_pi = out.filter(pl.col("Program Increment") == "PI 26.1")["Feature Key"].n_unique()
+    check("feature count: by story-derived Program Increment a feature shows in every PI its stories touch (12)",
+          by_story_pi == 12, detail=f"got {by_story_pi}")
+    by_own_pi = out.filter((pl.col("Feature Pi") == "PI 26.1")
+                           & (pl.col("Feature Status") == "Done"))["Feature Key"].n_unique()
+    check("feature count: by the feature's own Feature Pi it is exactly the 10 Done features",
+          by_own_pi == 10, detail=f"got {by_own_pi}")
+    strays = out.filter((pl.col("Program Increment") == "PI 26.1") & (pl.col("Feature Pi") != "PI 26.1"))
+    check("feature count: the two extras are the stray-story rows (Sprint Count 1)",
+          sorted(strays["Feature Key"].to_list()) == ["F11", "F12"]
+          and strays["Sprint Count"].unique().to_list() == [1],
+          detail=str(strays.select(["Feature Key", "Sprint Count"]).rows()))
+
+
 def test_decode_sql_text_tolerates_windows_bytes() -> None:
     # Plain UTF-8 passes through unchanged
     check("decode: clean utf-8 unchanged",
@@ -457,6 +505,7 @@ def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
     test_drop_todays_history_prevents_double_count()
     test_sprint_lookup_guards()
+    test_feature_pi_counts_features_by_their_own_pi()
     test_decode_sql_text_tolerates_windows_bytes()
     test_configure_result_encoding_is_safe()
     test_supertype_rules()

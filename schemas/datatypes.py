@@ -72,6 +72,9 @@ EXPECTED_DTYPES_EPICS: dict[str, str] = {
     "SPRINT_NAME": "string",
     "FIX_VERSION": "string",
     "FEATURE_FIX_VERSION": "string",
+    "FEATURE_TEAM": "string",
+    "FEATURE_PI": "string",        # the feature's own PI; PROGRAM_INCREMENT on the row is story-derived
+    "FEATURE_STATUS": "string",
     "PROGRAM_INCREMENT": "string",
 
     # Dates
