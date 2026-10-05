@@ -23,6 +23,7 @@ paths:
   sql_dir: "sql"
   cache_dir: "cache"
   output_dir: "output"
+  csv_dir: "output/csv"          # where --csv writes STORIES.csv, EPICS.csv, EPICS_ACRP.csv, FEATURE_BURNUP.csv
   backup_dir: "backups"
 
 # Timestamped copies of hyper outputs, kept before each overwrite.

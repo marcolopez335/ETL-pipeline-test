@@ -447,6 +447,34 @@ def test_feature_pi_counts_features_by_their_own_pi() -> None:
           detail=str(strays.select(["Feature Key", "Sprint Count"]).rows()))
 
 
+def test_export_csv_round_trips() -> None:
+    """--csv: the CSV carries the same columns and rows as the frame, in a
+    folder that is created on demand, readable back with the BOM stripped."""
+    import tempfile
+    from pathlib import Path
+    from conversion.shared import export_csv
+
+    df = pl.DataFrame({
+        "Feature Key": ["F-1", "F-2"],
+        "Snapshot Date": [datetime(2026, 4, 6).date(), None],
+        "Last Updated": [datetime(2026, 4, 6, 10, 30), datetime(2026, 4, 6, 10, 30)],
+        "Bv": [10.0, None],
+        "Sprint Names": ["AMMM 26.1.1, AMMM 26.1.2", None],
+        "Is Synthetic": [False, True],
+    })
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "csv" / "EPICS.csv"
+        export_csv(df, path)
+        check("csv: folder created and file written", path.is_file())
+        check("csv: starts with a UTF-8 BOM for Excel", path.read_bytes()[:3] == b"\xef\xbb\xbf")
+        back = pl.read_csv(path)
+        check("csv: same columns in the same order", back.columns == df.columns, detail=str(back.columns))
+        check("csv: same row count", back.height == 2)
+        check("csv: comma inside a value survives quoting",
+              back["Sprint Names"][0] == "AMMM 26.1.1, AMMM 26.1.2", detail=str(back["Sprint Names"][0]))
+        check("csv: nulls come back empty", back["Bv"][1] is None and back["Snapshot Date"][1] is None)
+
+
 def test_decode_sql_text_tolerates_windows_bytes() -> None:
     # Plain UTF-8 passes through unchanged
     check("decode: clean utf-8 unchanged",
@@ -506,6 +534,7 @@ def main() -> int:
     test_drop_todays_history_prevents_double_count()
     test_sprint_lookup_guards()
     test_feature_pi_counts_features_by_their_own_pi()
+    test_export_csv_round_trips()
     test_decode_sql_text_tolerates_windows_bytes()
     test_configure_result_encoding_is_safe()
     test_supertype_rules()

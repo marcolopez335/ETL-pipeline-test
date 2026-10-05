@@ -6,7 +6,7 @@ from schemas.datatypes import EXPECTED_DTYPES_EPICS
 # without the proprietary `common` package, like stories_table and burnup_table
 from conversion.shared import (
     OUTPUT_DIR, SPRINT_VERSION_PATTERN, get_cache_path, get_logger, run_query, clean_dtypes,
-    update_history, union_data, export_hyper, log_dataframe_summary,
+    update_history, union_data, export_csv, export_hyper, get_csv_path, log_dataframe_summary,
     publish_hyper, fill_missing_snapshots, history_fetch_plan, parallel_fetch,
     rename_to_snake_case, rename_to_title_case,
 )
@@ -330,7 +330,7 @@ def run_update_cache(config: dict, force: bool = False):
 
 
 def run(config: dict, publish: bool = False, publish_targets: list[str] | None = None,
-        force: bool = False) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+        force: bool = False, csv: bool = False) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     cfg = config["epics"]
     cache_path = get_cache_path(cfg["cache_filename"])
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
@@ -405,14 +405,21 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] | None =
         df_burnup = build_burnup(fetched["burnup"])
     log_dataframe_summary(df_burnup, "Feature Burn-Up")
 
-    with step_spinner(8, total, "Exporting EPICS.hyper"):
+    suffix = " + csv" if csv else ""
+    with step_spinner(8, total, "Exporting EPICS.hyper" + suffix):
         export_hyper(df, hyper_path, "Epics", config)
+        if csv:
+            export_csv(df, get_csv_path(f"{hyper_path.stem}.csv"))
 
-    with step_spinner(9, total, "Exporting EPICS_ACRP.hyper"):
+    with step_spinner(9, total, "Exporting EPICS_ACRP.hyper" + suffix):
         export_hyper(df_acrp, acrp_hyper_path, "Epics_ACRP", config)
+        if csv:
+            export_csv(df_acrp, get_csv_path(f"{acrp_hyper_path.stem}.csv"))
 
-    with step_spinner(10, total, "Exporting FEATURE_BURNUP.hyper"):
+    with step_spinner(10, total, "Exporting FEATURE_BURNUP.hyper" + suffix):
         export_hyper(df_burnup, burnup_hyper_path, "Feature_Burnup", config)
+        if csv:
+            export_csv(df_burnup, get_csv_path(f"{burnup_hyper_path.stem}.csv"))
 
     if publish:
         with step_spinner(11, total, "Publishing to Tableau"):

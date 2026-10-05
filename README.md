@@ -132,6 +132,7 @@ python main.py [pipeline] [action] [options]
 |------|-------------|
 | `--force` | Bypass cache shrinkage safety check (use if cache needs to shrink) |
 | `--verbose` | Show full per-column stats tables after each step (slower at large row counts) |
+| `--csv` | Also write each exported table as a CSV (same columns as the `.hyper`) into `paths.csv_dir`, default `output/csv/` |
 
 ### Examples
 
@@ -156,6 +157,9 @@ python main.py --epics --query
 
 # Publish both pipelines to production
 python main.py --publish-prd
+
+# Run epics and also drop EPICS.csv, EPICS_ACRP.csv, FEATURE_BURNUP.csv into output/csv/
+python main.py --epics --csv
 
 # Publish to the external server (always requires the explicit flag)
 python main.py --publish-external
