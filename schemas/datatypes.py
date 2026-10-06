@@ -51,6 +51,7 @@ EXPECTED_DTYPES_STORIES: dict[str, str] = {
 EXPECTED_DTYPES_EPICS: dict[str, str] = {
     # Identifiers
     "EPIC_KEY": "string",
+    "JIRA_PROJECT_NAME": "string",
     "FEATURE_KEY": "string",
     "FEATURE_ID": "string",
     "SUBCAPABILITY_KEY": "string",
@@ -74,7 +75,7 @@ EXPECTED_DTYPES_EPICS: dict[str, str] = {
     "FEATURE_FIX_VERSION": "string",
     "FEATURE_TEAM": "string",
     "FEATURE_PI": "string",        # the feature's own PI; PROGRAM_INCREMENT on the row is story-derived
-    "FEATURE_STATUS": "string",
+    "TYPE": "string",
     "PROGRAM_INCREMENT": "string",
 
     # Dates
@@ -84,6 +85,10 @@ EXPECTED_DTYPES_EPICS: dict[str, str] = {
     "RESOLVED_DATE": "datetime",
     "BEGIN_DATE": "datetime",
     "END_DATE": "datetime",
+    "PLANNED_START": "datetime",
+    "PLANNED_END": "datetime",
+    "RESOLVED": "datetime",
+    "BASELINE_PLANNED_END": "datetime",
 
     # Numeric
     "STORY_POINTS": "float",

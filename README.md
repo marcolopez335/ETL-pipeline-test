@@ -172,6 +172,8 @@ Flags can be combined freely: `python main.py --stories --publish-tst --query`
 
 ### Epics
 
+The epic queries return **one row per feature** (per snapshot for history). The Epic level is commented out in the SQL because joining it repeated each feature once per child epic, inflating feature estimates. The history cache is keyed on `FEATURE_KEY`.
+
 1. Fetch summary data and history snapshots from Tibco
 2. Update incremental history cache
 3. Fill missing Monday snapshots (synthetic)
@@ -181,7 +183,7 @@ Flags can be combined freely: `python main.py --stories --publish-tst --query`
 7. Build feature burn-up view and export to `FEATURE_BURNUP.hyper`
 8. Optionally publish all hyper files to Tableau Server
 
-**Counting features per PI.** `PROGRAM_INCREMENT` on an epic row comes from the feature's *stories* (the agile rollup is per feature and story PI), so a feature appears under every PI any of its stories is tagged with — one stale tag or one carried-over story adds the feature to another PI. To count features by the PI they belong to, use `FEATURE_PI` (the feature's own PI field), together with `FEATURE_STATUS` and `FEATURE_TEAM`; keep `PROGRAM_INCREMENT` for points-by-PI. A stray story shows up as a row with `SPRINT_COUNT` = 1.
+**Counting features per PI.** `PROGRAM_INCREMENT` on an epic row comes from the feature's *stories* (the agile rollup is per feature and story PI), so a feature appears under every PI any of its stories is tagged with — one stale tag or one carried-over story adds the feature to another PI. To count features by the PI they belong to, use `FEATURE_PI` (the feature's own PI field), together with `STATUS` and `FEATURE_TEAM`; keep `PROGRAM_INCREMENT` for points-by-PI. A stray story shows up as a row with `SPRINT_COUNT` = 1.
 
 ### Feature Burn-Up
 

@@ -341,7 +341,7 @@ def test_feature_pi_counts_features_by_their_own_pi() -> None:
     epics = pl.DataFrame({
         "EPIC_KEY": ["E-" + k for k in keys], "FEATURE_KEY": keys,
         "FEATURE_PI": ["PI 26.1"] * 10 + ["PI 26.2", "PI 25.4"],
-        "FEATURE_STATUS": ["Done"] * 12, "FEATURE_TEAM": ["Team A"] * 12,
+        "STATUS": ["Done"] * 12, "FEATURE_TEAM": ["Team A"] * 12,
     })
     rollup = pl.DataFrame({
         "FEATURE_ID": keys + ["F11", "F12"],
@@ -365,7 +365,7 @@ def test_feature_pi_counts_features_by_their_own_pi() -> None:
     check("feature count: by story-derived Program Increment a feature shows in every PI its stories touch (12)",
           by_story_pi == 12, detail=f"got {by_story_pi}")
     by_own_pi = out.filter((pl.col("Feature Pi") == "PI 26.1")
-                           & (pl.col("Feature Status") == "Done"))["Feature Key"].n_unique()
+                           & (pl.col("Status") == "Done"))["Feature Key"].n_unique()
     check("feature count: by the feature's own Feature Pi it is exactly the 10 Done features",
           by_own_pi == 10, detail=f"got {by_own_pi}")
     strays = out.filter((pl.col("Program Increment") == "PI 26.1") & (pl.col("Feature Pi") != "PI 26.1"))

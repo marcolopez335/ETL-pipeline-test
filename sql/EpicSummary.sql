@@ -1,14 +1,17 @@
 WITH
-Epics AS (
-    SELECT
-        ISSUE_KEY AS EPIC_KEY,
-        PARENT_KEY AS EPIC_PARENT,
-        SUMMARY AS EPIC_SUMMARY,
-        ESTIMATE AS EPIC_ESTIMATE,
-        OPEN_ESTIMATE AS EPIC_OPEN_ESTIMATE,
-    FROM AMMM_JIRA_EPIC_SUMMARY
-    WHERE ISSUE_TYPE = 'Epic'
-),
+-- Epics are disconnected: joining them fanned each feature out into one
+-- row per child epic (repeating the feature's estimates). One row per
+-- feature now; the Epics CTE and EP.* columns are kept commented out.
+-- Epics AS (
+--     SELECT
+--         ISSUE_KEY AS EPIC_KEY,
+--         PARENT_KEY AS EPIC_PARENT,
+--         SUMMARY AS EPIC_SUMMARY,
+--         ESTIMATE AS EPIC_ESTIMATE,
+--         OPEN_ESTIMATE AS EPIC_OPEN_ESTIMATE,
+--     FROM AMMM_JIRA_EPIC_SUMMARY
+--     WHERE ISSUE_TYPE = 'Epic'
+-- ),
 Features As (
     SELECT
         ISSUE_KEY AS FEATURE_KEY,
@@ -20,8 +23,14 @@ Features As (
         PROGRAM_PRIORITY AS BV,
         FIX_VERSION AS FEATURE_FIX_VERSION,
         TEAM_NAME AS FEATURE_TEAM,
-        PROGRAM_INCREMENT AS FEATURE_PI,   -- the feature's own PI field (the epic row's PROGRAM_INCREMENT comes from its stories)
-        STATUS AS FEATURE_STATUS
+        PROGRAM_INCREMENT AS FEATURE_PI,   -- the feature's own PI field (the row's PROGRAM_INCREMENT comes from its stories)
+        STATUS AS STATUS,
+        TARGET_START AS PLANNED_START,
+        TARGET_END AS PLANNED_END,
+        RESOLVED AS RESOLVED,
+        ISSUE_TYPE AS "TYPE",
+        PROJECT_NAME AS JIRA_PROJECT_NAME,
+        PLANNED_END_DATE AS BASELINE_PLANNED_END
     FROM AMMM_JIRA_EPIC_SUMMARY
     WHERE ISSUE_TYPE = 'Feature'
 ),
@@ -48,7 +57,7 @@ CustomerEpics AS (
     WHERE ISSUE_TYPE = 'Customer Epic'
 )
 SELECT
-    EP.EPIC_KEY,
+    -- EP.EPIC_KEY,
     CE.PROGRAM,
     CE.CUSTEPIC_KEY,
     CE.CUSTCAP_ESTIMATE,
@@ -63,13 +72,19 @@ SELECT
     FT.FEATURE_FIX_VERSION,
     FT.FEATURE_TEAM,
     FT.FEATURE_PI,
-    FT.FEATURE_STATUS,
-    EP.EPIC_SUMMARY,
-    EP.EPIC_ESTIMATE,
-    EP.EPIC_OPEN_ESTIMATE
-FROM Epics EP
-    LEFT JOIN Features FT
-        ON FT.FEATURE_KEY = EP.EPIC_PARENT
+    FT.STATUS,
+    FT.PLANNED_START,
+    FT.PLANNED_END,
+    FT.RESOLVED,
+    FT."TYPE",
+    FT.JIRA_PROJECT_NAME,
+    FT.BASELINE_PLANNED_END
+    -- EP.EPIC_SUMMARY,
+    -- EP.EPIC_ESTIMATE,
+    -- EP.EPIC_OPEN_ESTIMATE
+FROM Features FT
+    -- LEFT JOIN Epics EP
+    --     ON EP.EPIC_PARENT = FT.FEATURE_KEY
     LEFT JOIN SubCapabilities SCT
         ON SCT.SUBCAPABILITY_KEY = FT.FEATURE_PARENT
     LEFT JOIN CustomerCapabilities CC

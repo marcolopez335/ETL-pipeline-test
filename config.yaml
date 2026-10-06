@@ -44,7 +44,7 @@ epics:
   burnup_hyper_filename: "FEATURE_BURNUP.hyper"
   sql_burnup: "FeatureBurnup.sql"
   cache_filename: "epics_history_cache.parquet"
-  key_column: "EPIC_KEY"
+  key_column: "FEATURE_KEY"     # one row per feature per snapshot (epics are not joined)
   sql_history_full: "EpicHistory.sql"
   sql_history_recent: "EpicHistory_recent.sql"
   sql_summary: "EpicSummary.sql"

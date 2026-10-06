@@ -19,13 +19,13 @@ SQL query files executed by the ETL pipelines against the Tibco database.
 - `StoryHistory_recent.sql` — Recent story snapshots
 
 ### Epics
-- `EpicSummary.sql` — Current epics summary
-- `EpicHistory.sql` — Full epic snapshot history
-- `EpicHistory_recent.sql` — Recent epic snapshots
+- `EpicSummary.sql` — Current features summary (one row per feature)
+- `EpicHistory.sql` — Full feature snapshot history
+- `EpicHistory_recent.sql` — Recent feature snapshots
 
 ## Notes
 
 - Filenames are referenced in `config.yaml` under each pipeline's section (`sql_summary`, `sql_history_full`, `sql_history_recent`, etc.)
-- History queries must return a `SNAPSHOT_DATE` column and the pipeline's key column (e.g., `STORY_NUMBER`, `EPIC_KEY`)
-- The SQL uses a CTE hierarchy: epic -> feature -> subcapability -> customercapability -> customerepic
+- History queries must return a `SNAPSHOT_DATE` column and the pipeline's key column (e.g., `STORY_NUMBER`, `FEATURE_KEY`)
+- The epic queries use a CTE hierarchy: feature -> subcapability -> customercapability -> customerepic. The Epic level is commented out so each feature is one row (joining epics repeated the feature once per child epic)
 - `ORDER BY` clauses in these queries do not affect pipeline logic — they are for manual inspection only
