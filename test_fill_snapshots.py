@@ -542,12 +542,80 @@ def test_schemas_match_sql_and_parse_string_dates() -> None:
         check("clean_dtypes: unknown dtype raises", True)
 
 
+def test_rebuild_cache_and_column_drift_warning() -> None:
+    """--rebuild-cache reseeds the history cache from the full query (backing
+    up the old file), and an incremental update warns when the history SQL
+    gained or lost columns since the cache was seeded."""
+    import logging
+    import tempfile
+    from pathlib import Path
+    import conversion.shared as shared
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        cache = tmp / "epics_history_cache.parquet"
+        old_backup_dir = shared.BACKUP_DIR
+        shared.BACKUP_DIR = tmp / "backups"
+        shared.BACKUP_DIR.mkdir()
+        cfg = {"cache": {"backup_enabled": True, "max_cache_backups": 3, "min_retention_pct": 0.98}}
+        try:
+            check("fetch plan: no cache -> full query",
+                  shared.history_fetch_plan(cache, "full.sql", "recent.sql") == ("full.sql", "full"))
+            # Old epic-grain cache: 3 epic rows for one feature, no FEATURE_PI column
+            old = pl.DataFrame({
+                "EPIC_KEY": ["E1", "E2", "E3"], "FEATURE_KEY": ["F1"] * 3,
+                "SNAPSHOT_DATE": [datetime(2026, 9, 28).date()] * 3,
+            })
+            old.write_parquet(cache)
+            check("fetch plan: cache present -> recent query",
+                  shared.history_fetch_plan(cache, "full.sql", "recent.sql") == ("recent.sql", "recent"))
+            check("fetch plan: rebuild -> full query even with a cache",
+                  shared.history_fetch_plan(cache, "full.sql", "recent.sql", rebuild=True) == ("full.sql", "full"))
+
+            # Drift: the recent query has FEATURE_PI, the cache does not (and still has EPIC_KEY)
+            records = []
+            handler = logging.Handler()
+            handler.emit = records.append
+            shared.logger.addHandler(handler)
+            try:
+                recent = pl.DataFrame({
+                    "FEATURE_KEY": ["F1"], "FEATURE_PI": ["PI 26.1"],
+                    "SNAPSHOT_DATE": [datetime(2026, 10, 5).date()],
+                })
+                shared.update_history_cache_with_recent(pl.scan_parquet(cache), recent, "FEATURE_KEY",
+                                                        config={"cache": {"min_retention_pct": 0.0}})
+            finally:
+                shared.logger.removeHandler(handler)
+            msgs = " ".join(r.getMessage() for r in records)
+            check("drift: warns about a column the cache lacks",
+                  "has no column(s) ['FEATURE_PI']" in msgs, detail=msgs[:200])
+            check("drift: warns about a column the query no longer returns",
+                  "no longer returns column(s) ['EPIC_KEY']" in msgs, detail=msgs[:200])
+
+            # Rebuild: full feature-grain history replaces the epic-grain cache
+            full = pl.DataFrame({
+                "FEATURE_KEY": ["F1", "F1"], "FEATURE_PI": ["PI 26.1"] * 2,
+                "SNAPSHOT_DATE": [datetime(2026, 9, 28).date(), datetime(2026, 10, 5).date()],
+            })
+            out = shared.update_history("full.sql", "recent.sql", "FEATURE_KEY", cache, config=cfg,
+                                        prefetched=full, prefetched_kind="full", rebuild=True)
+            reread = pl.read_parquet(cache)
+            check("rebuild: cache reseeded from the full query (feature grain, new column)",
+                  out.height == 2 and reread.height == 2 and "EPIC_KEY" not in reread.columns
+                  and "FEATURE_PI" in reread.columns, detail=str(reread.columns))
+            check("rebuild: old cache backed up first",
+                  len(list(shared.BACKUP_DIR.glob("epics_history_cache_*.parquet"))) == 1)
+        finally:
+            shared.BACKUP_DIR = old_backup_dir
+
+
 def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
     test_drop_todays_history_prevents_double_count()
     test_sprint_lookup_guards()
     test_feature_pi_counts_features_by_their_own_pi()
     test_export_csv_round_trips()
+    test_rebuild_cache_and_column_drift_warning()
     test_schemas_match_sql_and_parse_string_dates()
     test_supertype_rules()
     test_align_schemas_unifies_datetime_units()

@@ -312,6 +312,10 @@ def print_error(message: str) -> None:
     console.print(f"  [red bold]FAIL[/] {message}")
 
 
+def print_warning(message: str) -> None:
+    console.print(f"  [yellow bold]WARN[/] {message}")
+
+
 def print_pipeline_complete(name: str, elapsed: float) -> None:
     console.print()
     console.print(
