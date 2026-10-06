@@ -5,7 +5,7 @@ from schemas.datatypes import EXPECTED_DTYPES_EPICS
 # get_logger comes via shared so this module stays importable (and testable)
 # without the proprietary `common` package
 from conversion.shared import (
-    OUTPUT_DIR, get_cache_path, get_logger, run_query, clean_dtypes, update_history,
+    OUTPUT_DIR, drop_todays_history, get_cache_path, get_logger, run_query, clean_dtypes, update_history,
     union_data, export_csv, export_hyper, get_csv_path, log_dataframe_summary,
     publish_hyper, fill_missing_snapshots, history_fetch_plan, parallel_fetch,
 )
@@ -404,6 +404,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
         df_summary = join_agile(df_summary, df_agile_summary, has_snapshot=False)
 
     with step_spinner(5, total, "Unioning & transforming"):
+        df_history = drop_todays_history(df_history)
         df = union_data(df_summary, df_history)
         df = data_functions(df, sprint_history_lookup, sprint_summary_lookup)
 

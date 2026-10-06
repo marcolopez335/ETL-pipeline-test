@@ -612,6 +612,31 @@ def fill_missing_snapshots(
     return combined
 
 
+def drop_todays_history(df_history: pl.DataFrame) -> pl.DataFrame:
+    """Drop history rows snapshotted today — the summary owns today's data.
+
+    On snapshot days the history table already contains rows dated today.
+    The summary rows (null SNAPSHOT_DATE, later filled with today's date)
+    would then duplicate every story / feature on the latest date, doubling
+    counts in Tableau. Used by both the stories and the epics pipelines. The summary is fetched at run time, so it is
+    the fresher version of today; keep it and drop the morning snapshot from
+    the export. The cache is unaffected — update_history has already stored
+    today's snapshot, and tomorrow's export serves today from history as
+    usual.
+    """
+    today = datetime.now().date()
+    before = df_history.height
+    df_history = df_history.filter(
+        pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False).ne_missing(today)
+    )
+    dropped = before - df_history.height
+    if dropped:
+        logger.info(
+            f"Dropped {dropped} history rows dated {today} — summary supplies today's rows"
+        )
+    return df_history
+
+
 def union_data(df_summary: pl.DataFrame, df_history: pl.DataFrame) -> pl.DataFrame:
     df_summary, df_history = _align_schemas(df_summary, df_history)
     unioned = pl.concat([df_summary, df_history])

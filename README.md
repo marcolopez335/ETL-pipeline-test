@@ -174,10 +174,11 @@ Flags can be combined freely: `python main.py --stories --publish-tst --query`
 1. Fetch summary data and history snapshots from Tibco
 2. Update incremental history cache
 3. Fill missing Monday snapshots (synthetic)
-4. Union summary with history, fetch and join epics lookup
-5. Apply transformations (`LAST_UPDATED`, `PROJECT_NAME_VERSION`, `SPRINT_NAME_ALT`, `SNAPSHOT_DATE_ALT`, `PI_FROM_SPRINT`, column renaming)
-6. Export to `STORIES.hyper`
-7. Optionally publish to Tableau Server
+4. Drop history rows dated today — the live summary supplies today's rows, so stories aren't double-counted on snapshot days (the cache still keeps the official snapshot)
+5. Union summary with history, fetch and join epics lookup
+6. Apply transformations (`LAST_UPDATED`, `PROJECT_NAME_VERSION`, `SPRINT_NAME_ALT`, `SNAPSHOT_DATE_ALT`, `PI_FROM_SPRINT`, column renaming)
+7. Export to `STORIES.hyper`
+8. Optionally publish to Tableau Server
 
 ### Epics
 
@@ -186,7 +187,7 @@ The epic queries return **one row per feature** (per snapshot for history). The 
 1. Fetch summary data and history snapshots from Tibco
 2. Update incremental history cache
 3. Fill missing Monday snapshots (synthetic)
-4. Union summary with history, apply transformations (`LAST_UPDATED`, sprint parsing, `MIN_SPRINT`/`MAX_SPRINT`)
+4. Drop history rows dated today (the live summary supplies today's rows — same double-count guard as stories), union summary with history, apply transformations (`LAST_UPDATED`, sprint parsing, `MIN_SPRINT`/`MAX_SPRINT`)
 5. Export to `EPICS.hyper`
 6. Build ACRP release range view and export to `EPICS_ACRP.hyper`
 7. Build feature burn-up view and export to `FEATURE_BURNUP.hyper`

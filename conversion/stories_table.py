@@ -1,10 +1,11 @@
 import time
 from datetime import datetime
 import polars as pl
-from common.logging import get_logger
 from schemas.datatypes import EXPECTED_DTYPES_STORIES
+# get_logger comes via shared so this module stays importable (and testable)
+# without the proprietary `common` package
 from conversion.shared import (
-    OUTPUT_DIR, get_cache_path, run_query, clean_dtypes, update_history,
+    OUTPUT_DIR, drop_todays_history, get_cache_path, get_logger, run_query, clean_dtypes, update_history,
     union_data, export_csv, export_hyper, get_csv_path, log_dataframe_summary, publish_hyper,
     fill_missing_snapshots, history_fetch_plan, parallel_fetch,
 )
@@ -126,6 +127,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
         df_history = fill_missing_snapshots(df_summary, df_history, cfg["key_column"], config=config)
 
     with step_spinner(4, total, "Joining & transforming"):
+        df_history = drop_todays_history(df_history)
         stories = union_data(df_summary, df_history)
         epics = clean_dtypes(fetched["epics"], EXPECTED_DTYPES_STORIES)
         df = join_stories_data(stories, epics)
