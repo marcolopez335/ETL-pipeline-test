@@ -403,11 +403,55 @@ def test_export_csv_round_trips() -> None:
         check("csv: nulls come back empty", back["Bv"][1] is None and back["Snapshot Date"][1] is None)
 
 
+def test_schemas_match_sql_and_parse_string_dates() -> None:
+    """Every schema key is a column its queries return (a renamed SQL column
+    must not silently skip its cast), and text dates are parsed, not nulled."""
+    import re
+    from pathlib import Path
+    from conversion.shared import clean_dtypes
+    from schemas.datatypes import EXPECTED_DTYPES_EPICS, EXPECTED_DTYPES_STORIES
+
+    sql_dir = Path(__file__).resolve().parent / "sql"
+
+    def output_names(*files: str) -> set[str]:
+        names = set()
+        for f in files:
+            text = re.sub(r"--[^\n]*", "", (sql_dir / f).read_text())  # drop commented-out lines
+            names |= set(re.findall(r"\b[A-Z][A-Z0-9_]*\b", text.replace('"', "")))
+        return names
+
+    for label, schema, files in [
+        ("stories", EXPECTED_DTYPES_STORIES, ["Asum.sql", "Ahist.sql", "Ahist_recent.sql", "EsumEhist.sql"]),
+        ("epics", EXPECTED_DTYPES_EPICS, ["EpicSummary.sql", "EpicHistory.sql", "EpicHistory_recent.sql"]),
+    ]:
+        missing = sorted(k for k in schema if k not in output_names(*files))
+        check(f"schema: every {label} key appears in its SQL", not missing, detail=str(missing))
+
+    df = pl.DataFrame({
+        "PLANNED_START": ["2026-01-05", None],
+        "RESOLVED": ["2026-01-05 10:30:00", None],
+        "FEATURE_ESTIMATE": ["8", "x"],
+    })
+    out = clean_dtypes(df, EXPECTED_DTYPES_EPICS)
+    check("clean_dtypes: text date parsed, not nulled",
+          out["PLANNED_START"][0] == datetime(2026, 1, 5), detail=str(out["PLANNED_START"].to_list()))
+    check("clean_dtypes: text timestamp parsed, not nulled",
+          out["RESOLVED"][0] == datetime(2026, 1, 5, 10, 30), detail=str(out["RESOLVED"].to_list()))
+    check("clean_dtypes: bad number becomes null, good one casts",
+          out["FEATURE_ESTIMATE"].to_list() == [8.0, None], detail=str(out["FEATURE_ESTIMATE"].to_list()))
+    try:
+        clean_dtypes(df, {"PLANNED_START": "datetme"})
+        check("clean_dtypes: unknown dtype raises", False)
+    except ValueError:
+        check("clean_dtypes: unknown dtype raises", True)
+
+
 def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
     test_sprint_lookup_guards()
     test_feature_pi_counts_features_by_their_own_pi()
     test_export_csv_round_trips()
+    test_schemas_match_sql_and_parse_string_dates()
     test_supertype_rules()
     test_align_schemas_unifies_datetime_units()
     test_align_schemas_handles_missing_and_mixed_dtypes()

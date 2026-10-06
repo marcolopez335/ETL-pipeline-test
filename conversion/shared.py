@@ -171,17 +171,35 @@ def test_connection(database: str = "default", config: dict | None = None) -> bo
 
 
 def clean_dtypes(df: pl.DataFrame, schema: dict) -> pl.DataFrame:
+    """Cast columns to the dtypes declared in a ``schemas.datatypes`` mapping.
+
+    ``schema`` maps column name -> ``"datetime" | "float" | "string"``.
+    Columns missing from ``df`` are skipped. Casts are non-strict: values
+    that cannot be converted become null rather than raising.
+
+    The ODBC driver normally returns real datetimes; a string-typed date
+    column is parsed with format inference, because the plain String ->
+    Datetime cast only accepts ISO "T" timestamps and turns "2026-01-05" or
+    "2026-01-05 10:30:00" into null.
+    """
     casts = []
     for col, dtype in schema.items():
         if col not in df.columns:
             continue
 
         if dtype == "datetime":
-            casts.append(pl.col(col).cast(pl.Datetime, strict=False))
+            expr = pl.col(col)
+            if df.schema[col] == pl.Utf8:
+                expr = expr.str.to_datetime(strict=False)
+            casts.append(expr.cast(pl.Datetime, strict=False))
         elif dtype == "float":
             casts.append(pl.col(col).cast(pl.Float64, strict=False))
         elif dtype == "string":
             casts.append(pl.col(col).cast(pl.Utf8, strict=False).str.strip_chars())
+        else:
+            raise ValueError(
+                f"Unknown dtype '{dtype}' for column {col} -- expected datetime, float or string"
+            )
 
     if casts:
         df = df.with_columns(casts)
