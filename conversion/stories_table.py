@@ -5,7 +5,7 @@ from common.logging import get_logger
 from schemas.datatypes import EXPECTED_DTYPES_STORIES
 from conversion.shared import (
     OUTPUT_DIR, get_cache_path, run_query, clean_dtypes, update_history,
-    union_data, export_hyper, log_dataframe_summary, publish_hyper,
+    union_data, export_csv, export_hyper, get_csv_path, log_dataframe_summary, publish_hyper,
     fill_missing_snapshots, history_fetch_plan, parallel_fetch,
 )
 from conversion.console import (
@@ -90,7 +90,7 @@ def run_update_cache(config: dict, force: bool = False):
 
 
 def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
-        force: bool = False) -> pl.DataFrame:
+        force: bool = False, csv: bool = False) -> pl.DataFrame:
     cfg = config["stories"]
     cache_path = get_cache_path(cfg["cache_filename"])
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
@@ -133,8 +133,10 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
 
     log_dataframe_summary(df, "Stories Final")
 
-    with step_spinner(5, total, "Exporting hyper"):
+    with step_spinner(5, total, "Exporting hyper" + (" + csv" if csv else "")):
         export_hyper(df, hyper_path, "Stories", config)
+        if csv:
+            export_csv(df, get_csv_path(f"{hyper_path.stem}.csv"))
 
     if publish:
         with step_spinner(6, total, "Publishing to Tableau"):

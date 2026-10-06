@@ -1,12 +1,13 @@
 import time
 from datetime import datetime
 import polars as pl
-from common.logging import get_logger
 from schemas.datatypes import EXPECTED_DTYPES_EPICS
+# get_logger comes via shared so this module stays importable (and testable)
+# without the proprietary `common` package
 from conversion.shared import (
-    OUTPUT_DIR, get_cache_path, run_query, clean_dtypes, update_history,
-    union_data, export_hyper, log_dataframe_summary, publish_hyper,
-    fill_missing_snapshots, history_fetch_plan, parallel_fetch,
+    OUTPUT_DIR, get_cache_path, get_logger, run_query, clean_dtypes, update_history,
+    union_data, export_csv, export_hyper, get_csv_path, log_dataframe_summary,
+    publish_hyper, fill_missing_snapshots, history_fetch_plan, parallel_fetch,
 )
 from conversion.console import (
     print_header, step_spinner, print_pipeline_complete,
@@ -21,24 +22,34 @@ SPRINT_PARTITION = ["SNAPSHOT_DATE", "PROGRAM_INCREMENT"]
 # IP (Innovation & Planning) is the final sprint in a PI, so it sorts last
 IP_SPRINT_LABEL = "IP"
 IP_SPRINT_SORT_VALUE = 99
+# Anchored version at the END of SPRINT_NAME (e.g. "26.1.2" or "26.1.IP"),
+# used for the min/max sprint range; the looser SPRINT_NAME_ALT_REGEX is used
+# to match a sprint to its own PI.
 SPRINT_VERSION_REGEX = r"(\d{2,4}\.\d+\.(?:\d+|IP))\s*$"
 SPRINT_NAME_ALT_REGEX = r"(\d{2}\.\d.\w+)"
+# The PI number inside a PROGRAM_INCREMENT value ("PI 26.1" -> "26.1"). The
+# same "26.1" is the first PI_PREFIX_LENGTH characters of a sprint version
+# ("26.1.2", "26.1.IP"), which is how a sprint is matched to its own PI.
+PI_NUMBER_PATTERN = r"(\d{2}\.\d)"
+PI_PREFIX_LENGTH = 4  # same prefix stories_table uses for PI_FROM_SPRINT
 
 
-def _sprint_sort_key() -> pl.Expr:
-    """Parse sprint version (e.g. '26.1.2' or '26.1.IP') into a sortable integer.
+def _sprint_sort_key(version_col: str = "SPRINT_VERSION") -> pl.Expr:
+    """Parse a sprint version ('26.1.2', '26.1.IP') into a sortable integer, or null.
 
     Key = year * 10000 + pi * 100 + sprint, where IP = 99.
-    Example: '26.1.2' -> 260102, '26.1.IP' -> 260199
+    Example: '26.1.2' -> 260102, '26.1.IP' -> 260199. A version that does
+    not parse (null, or a non-numeric part) yields null, so min/max simply
+    ignore it instead of treating it as sprint 0.0.0.
     """
-    version = pl.col("SPRINT_VERSION").str.split(".")
-    major = version.list.get(0).cast(pl.Int64, strict=False).fill_null(0) % 100
-    minor = version.list.get(1).cast(pl.Int64, strict=False).fill_null(0)
-    patch_str = version.list.get(2)
+    version = pl.col(version_col).str.split(".")
+    major = version.list.get(0, null_on_oob=True).cast(pl.Int64, strict=False) % 100
+    minor = version.list.get(1, null_on_oob=True).cast(pl.Int64, strict=False)
+    patch_str = version.list.get(2, null_on_oob=True)
     patch = (
         pl.when(patch_str == IP_SPRINT_LABEL)
         .then(pl.lit(IP_SPRINT_SORT_VALUE))
-        .otherwise(patch_str.cast(pl.Int64, strict=False).fill_null(0))
+        .otherwise(patch_str.cast(pl.Int64, strict=False))
     )
     return major * 10000 + minor * 100 + patch
 
@@ -98,77 +109,89 @@ def _compute_sprint_range(df: pl.DataFrame, partition_cols: list[str] = None) ->
     # Drop temp columns
     df = df.drop(["_sprint_sort_key", "_min_key", "_max_key"])
 
-    logger.info(
-        f"Sprint range: {df['MIN_SPRINT'][0]} - {df['MAX_SPRINT'][0]} "
-        f"({df.select(pl.col('SPRINT_VERSION').n_unique()).item()} unique sprints)"
-    )
+    if df.height > 0:
+        logger.info(
+            f"Sprint range: {df['MIN_SPRINT'][0]} - {df['MAX_SPRINT'][0]} "
+            f"({df.select(pl.col('SPRINT_VERSION').n_unique()).item()} unique sprints)"
+        )
 
     return df
 
 
 def _build_sprint_lookup(df: pl.DataFrame, partition_cols: list[str]) -> pl.DataFrame:
-    """Compute MIN_SPRINT / MAX_SPRINT from sprint name data and collapse to lookup."""
+    """MIN_SPRINT / MAX_SPRINT plus SPRINT_NAMES per partition, one row each.
+
+    SPRINT_NAMES lists the distinct sprint names the range was built from,
+    in sprint order (unparseable names last), joined with ", " -- the raw
+    input the sprint columns are derived from, visible on every epic row.
+    """
     df = _compute_sprint_range(df, partition_cols=partition_cols)
-    lookup = df.select(partition_cols + ["MIN_SPRINT", "MAX_SPRINT"]).unique()
+    names = (
+        df.filter(pl.col("SPRINT_NAME").is_not_null())
+        .with_columns(_sprint_sort_key().alias("_key"))
+        .sort(["_key", "SPRINT_NAME"], nulls_last=True)
+        .group_by(partition_cols, maintain_order=True)
+        .agg(pl.col("SPRINT_NAME").cast(pl.Utf8).unique(maintain_order=True).alias("SPRINT_NAMES"))
+        .with_columns(pl.col("SPRINT_NAMES").list.join(", "))
+    )
+    lookup = (
+        df.select(partition_cols + ["MIN_SPRINT", "MAX_SPRINT"]).unique()
+        .join(names, on=partition_cols, how="left")
+    )
     logger.info(f"Sprint range lookup ({partition_cols}): {lookup.height} rows")
     return lookup
 
 
+def _sprints_in_their_own_pi(df: pl.DataFrame) -> pl.DataFrame:
+    """Drop sprint-range rows whose sprint belongs to a different PI than the row says.
 
-def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str],
-                                 reference_date) -> pl.DataFrame:
-    """Build a lookup of CURRENT_SPRINT per partition.
-
-    Pre-filters to the sprint whose BEGIN_DATE–END_DATE contains reference_date,
-    so the result has at most one row per partition (no fan-out on join).
+    The sprint range queries pair each story's PROGRAM_INCREMENT tag with
+    the sprint the story sits in. One story tagged "PI 26.1" but worked in
+    sprint 26.2.1 would otherwise make 26.2.1 part of PI 26.1's range. A row
+    is kept when the PI parsed from its sprint name matches the PI number in
+    PROGRAM_INCREMENT, or when either side cannot be parsed (no basis to judge).
     """
-    lookup = df.with_columns(
-        pl.col("SPRINT_NAME")
-        .cast(pl.Utf8)
-        .str.extract(SPRINT_NAME_ALT_REGEX)
-        .alias("CURRENT_SPRINT")
-    ).select(
-        partition_cols + ["CURRENT_SPRINT", "BEGIN_DATE", "END_DATE"]
-    ).unique()
-
-    # Cast dates for consistent comparison
-    for col in ["BEGIN_DATE", "END_DATE"]:
-        if col in lookup.columns:
-            lookup = lookup.with_columns(pl.col(col).cast(pl.Date, strict=False))
-
-    # Filter to only the sprint that contains the reference date
-    ref = pl.lit(reference_date)
-    lookup = lookup.filter(
-        (ref >= pl.col("BEGIN_DATE")) & (ref <= pl.col("END_DATE"))
-    ).select(partition_cols + ["CURRENT_SPRINT"]).unique()
-
-    logger.info(f"Current sprint lookup ({partition_cols}): {lookup.height} rows")
-    return lookup
+    pi_from_tag = pl.col("PROGRAM_INCREMENT").cast(pl.Utf8).str.extract(PI_NUMBER_PATTERN)
+    pi_from_sprint = (
+        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_NAME_ALT_REGEX)
+        .str.slice(0, PI_PREFIX_LENGTH)
+    )
+    keep = pi_from_tag.is_null() | pi_from_sprint.is_null() | (pi_from_tag == pi_from_sprint)
+    kept = df.filter(keep)
+    dropped = df.height - kept.height
+    if dropped:
+        examples = (
+            df.filter(~keep).select(["PROGRAM_INCREMENT", "SPRINT_NAME"]).unique().head(5).rows()
+        )
+        logger.warning(
+            f"Sprint range: ignored {dropped} row(s) whose sprint belongs to another PI "
+            f"(a story's PI tag disagrees with its sprint), e.g. {examples}"
+        )
+    return kept
 
 
 def build_sprint_lookups(
     df_hist: pl.DataFrame, df_sum: pl.DataFrame,
-) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Build sprint range lookups from already-fetched sprint range data.
 
-    Returns (history_lookup, summary_lookup, current_sprint_hist, current_sprint_sum).
+    Returns (history_lookup, summary_lookup). Only sprints that belong to the
+    row's own PI take part.
     """
-    today = datetime.now().date()
-
     # History: keyed by SNAPSHOT_DATE + PROGRAM_INCREMENT
     if "SNAPSHOT_DATE" in df_hist.columns:
         df_hist = df_hist.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
+    df_hist = _sprints_in_their_own_pi(df_hist)
+    df_sum = _sprints_in_their_own_pi(df_sum)
     history_lookup = _build_sprint_lookup(df_hist, SPRINT_PARTITION)
-    current_sprint_hist = _build_current_sprint_lookup(df_hist, SPRINT_PARTITION, today)
 
     # Summary: keyed by PROGRAM_INCREMENT only (no snapshot date)
     summary_lookup = _build_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"])
-    current_sprint_sum = _build_current_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"], today)
 
-    return history_lookup, summary_lookup, current_sprint_hist, current_sprint_sum
+    return history_lookup, summary_lookup
 
 
-def fetch_sprint_range(config: dict) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+def fetch_sprint_range(config: dict) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Fetch sprint range data and build the lookups (sequential convenience wrapper)."""
     cfg = config["epics"]
     db = config["database"]["name"]
@@ -178,9 +201,7 @@ def fetch_sprint_range(config: dict) -> tuple[pl.DataFrame, pl.DataFrame, pl.Dat
 
 
 def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
-                   sprint_summary_lookup: pl.DataFrame,
-                   current_sprint_hist: pl.DataFrame,
-                   current_sprint_sum: pl.DataFrame) -> pl.DataFrame:
+                   sprint_summary_lookup: pl.DataFrame) -> pl.DataFrame:
     """Apply all post-union transformations."""
     # LAST_UPDATED timestamp
     now = datetime.now()
@@ -207,16 +228,8 @@ def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
     df = df.with_columns([
         pl.coalesce(["MIN_SPRINT", "MIN_SPRINT_sum"]).alias("MIN_SPRINT"),
         pl.coalesce(["MAX_SPRINT", "MAX_SPRINT_sum"]).alias("MAX_SPRINT"),
-    ]).drop(["MIN_SPRINT_sum", "MAX_SPRINT_sum"])
-
-    # CURRENT_SPRINT: pre-filtered to the sprint containing today's date,
-    # so the join is one-to-one (no fan-out). History first, summary fallback.
-    df = df.join(current_sprint_hist, on=SPRINT_PARTITION, how="left")
-    df = df.join(current_sprint_sum, on=["PROGRAM_INCREMENT"], how="left", suffix="_sum")
-
-    df = df.with_columns(
-        pl.coalesce(["CURRENT_SPRINT", "CURRENT_SPRINT_sum"]).alias("CURRENT_SPRINT"),
-    ).drop(["CURRENT_SPRINT_sum"], strict=False)
+        pl.coalesce(["SPRINT_NAMES", "SPRINT_NAMES_sum"]).alias("SPRINT_NAMES"),
+    ]).drop(["MIN_SPRINT_sum", "MAX_SPRINT_sum", "SPRINT_NAMES_sum"])
 
     # Rename columns: SNAKE_CASE -> Title Case
     rename_map = {
@@ -334,7 +347,7 @@ def _calc_steps(publish: bool) -> int:
 
 
 def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
-        force: bool = False) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+        force: bool = False, csv: bool = False) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     cfg = config["epics"]
     cache_path = get_cache_path(cfg["cache_filename"])
     hyper_path = OUTPUT_DIR / cfg["hyper_filename"]
@@ -381,7 +394,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     log_dataframe_summary(df_agile_summary, "Agile Summary")
 
     with step_spinner(4, total, "Joining agile data"):
-        sprint_history_lookup, sprint_summary_lookup, current_sprint_hist, current_sprint_sum = \
+        sprint_history_lookup, sprint_summary_lookup = \
             build_sprint_lookups(fetched["sprint_range"], fetched["sprint_range_summary"])
         # Ensure SNAPSHOT_DATE is Date on both sides before joining
         df_history = df_history.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
@@ -392,8 +405,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
 
     with step_spinner(5, total, "Unioning & transforming"):
         df = union_data(df_summary, df_history)
-        df = data_functions(df, sprint_history_lookup, sprint_summary_lookup,
-                           current_sprint_hist, current_sprint_sum)
+        df = data_functions(df, sprint_history_lookup, sprint_summary_lookup)
 
     # Build ACRP before filling Snapshot Date nulls — its filter relies on the
     # null marker to identify summary rows.
@@ -410,14 +422,21 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
         df_burnup = build_burnup(fetched["burnup"])
     log_dataframe_summary(df_burnup, "Feature Burn-Up")
 
-    with step_spinner(8, total, "Exporting EPICS.hyper"):
+    suffix = " + csv" if csv else ""
+    with step_spinner(8, total, "Exporting EPICS.hyper" + suffix):
         export_hyper(df, hyper_path, "Epics", config)
+        if csv:
+            export_csv(df, get_csv_path(f"{hyper_path.stem}.csv"))
 
-    with step_spinner(9, total, "Exporting EPICS_ACRP.hyper"):
+    with step_spinner(9, total, "Exporting EPICS_ACRP.hyper" + suffix):
         export_hyper(df_acrp, acrp_hyper_path, "Epics_ACRP", config)
+        if csv:
+            export_csv(df_acrp, get_csv_path(f"{acrp_hyper_path.stem}.csv"))
 
-    with step_spinner(10, total, "Exporting FEATURE_BURNUP.hyper"):
+    with step_spinner(10, total, "Exporting FEATURE_BURNUP.hyper" + suffix):
         export_hyper(df_burnup, burnup_hyper_path, "Feature_Burnup", config)
+        if csv:
+            export_csv(df_burnup, get_csv_path(f"{burnup_hyper_path.stem}.csv"))
 
     if publish:
         with step_spinner(11, total, "Publishing to Tableau"):

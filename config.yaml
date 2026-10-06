@@ -8,6 +8,7 @@ paths:
   sql_dir: "sql"
   cache_dir: "cache"
   output_dir: "output"
+  csv_dir: "output/csv"          # where --csv writes STORIES.csv, EPICS.csv, EPICS_ACRP.csv, FEATURE_BURNUP.csv
   log_dir: "logs"
   backup_dir: "backups"
 

@@ -30,6 +30,7 @@ SQL_DIR = ROOT_DIR / "sql"
 CACHE_DIR = ROOT_DIR / "cache"
 BACKUP_DIR = ROOT_DIR / "backups"
 OUTPUT_DIR = ROOT_DIR / "output"
+CSV_DIR = OUTPUT_DIR / "csv"        # --csv writes here; override via paths.csv_dir
 
 logger = get_logger(__name__)
 
@@ -50,7 +51,7 @@ def load_config() -> dict:
         cfg = yaml.safe_load(f) or {}
 
     paths = cfg.get("paths") or {}
-    global SQL_DIR, CACHE_DIR, BACKUP_DIR, OUTPUT_DIR
+    global SQL_DIR, CACHE_DIR, BACKUP_DIR, OUTPUT_DIR, CSV_DIR
     if "sql_dir" in paths:
         SQL_DIR = ROOT_DIR / paths["sql_dir"]
     if "cache_dir" in paths:
@@ -59,6 +60,7 @@ def load_config() -> dict:
         BACKUP_DIR = ROOT_DIR / paths["backup_dir"]
     if "output_dir" in paths:
         OUTPUT_DIR = ROOT_DIR / paths["output_dir"]
+    CSV_DIR = ROOT_DIR / paths["csv_dir"] if "csv_dir" in paths else OUTPUT_DIR / "csv"
 
     return cfg
 
@@ -71,6 +73,11 @@ def get_cache_path(filename: str) -> Path:
 def get_output_path(filename: str) -> Path:
     """Return the absolute path for an output file under the configured OUTPUT_DIR."""
     return OUTPUT_DIR / filename
+
+
+def get_csv_path(filename: str) -> Path:
+    """Return the absolute path for a CSV file under the configured CSV_DIR."""
+    return CSV_DIR / filename
 
 
 def _use_stored_credentials(config: dict | None) -> bool:
@@ -614,6 +621,18 @@ def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: di
             )
     pt.frame_to_hyper(arrow_table, database=hyper_path, table_mode="w", table=table_name)
     logger.info(f"Exported {df.height} rows to {hyper_path} (table: {table_name})")
+
+
+def export_csv(df: pl.DataFrame, csv_path: Path) -> None:
+    """Write a DataFrame as UTF-8 CSV (with BOM, so Excel opens it correctly).
+
+    Same column names and values as the .hyper export; dates are ISO 8601.
+    Overwrites the previous file. Enabled per run with ``--csv``.
+    """
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_csv(csv_path, include_bom=True)
+    logger.info(f"Exported {df.height} rows to {csv_path}")
+    print_info(f"CSV: [dim]{csv_path.name}[/]")
 
 
 def publish_hyper(hyper_path: Path, table_name: str, config: dict,

@@ -96,6 +96,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Open SQL shell loading from cache (no pipeline run)")
     parser.add_argument("--verbose", action="store_true",
                         help="Show full per-column stats tables after each step (slower)")
+    parser.add_argument("--csv", action="store_true",
+                        help="Also write each exported table as a CSV file (folder: paths.csv_dir, "
+                             "default output/csv)")
     return parser
 
 
@@ -152,12 +155,14 @@ def main() -> int:
     if run_all or args.stories:
         df_stories = stories.run(
             config, publish=do_publish, publish_targets=publish_targets, force=args.force,
+            csv=args.csv,
         )
         sql_tables["stories"] = df_stories
 
     if run_all or args.epics:
         df_epics, df_acrp, df_burnup = epics.run(
             config, publish=do_publish, publish_targets=publish_targets, force=args.force,
+            csv=args.csv,
         )
         sql_tables["epics"] = df_epics
         sql_tables["acrp"] = df_acrp

@@ -126,6 +126,7 @@ python main.py [pipeline] [action] [options]
 |------|-------------|
 | `--force` | Bypass cache shrinkage safety check (use if cache needs to shrink) |
 | `--verbose` | Show full per-column stats tables after each step (slower at large row counts) |
+| `--csv` | Also write each exported table as a CSV (same columns as the `.hyper`) into `paths.csv_dir`, default `output/csv/` |
 
 ### Examples
 
@@ -150,6 +151,9 @@ python main.py --epics --query
 
 # Publish both pipelines to production
 python main.py --publish-prd
+
+# Run epics and also drop EPICS.csv, EPICS_ACRP.csv, FEATURE_BURNUP.csv into output/csv/
+python main.py --epics --csv
 ```
 
 Flags can be combined freely: `python main.py --stories --publish-tst --query`
@@ -177,6 +181,8 @@ Flags can be combined freely: `python main.py --stories --publish-tst --query`
 7. Build feature burn-up view and export to `FEATURE_BURNUP.hyper`
 8. Optionally publish all hyper files to Tableau Server
 
+**Counting features per PI.** `PROGRAM_INCREMENT` on an epic row comes from the feature's *stories* (the agile rollup is per feature and story PI), so a feature appears under every PI any of its stories is tagged with — one stale tag or one carried-over story adds the feature to another PI. To count features by the PI they belong to, use `FEATURE_PI` (the feature's own PI field), together with `FEATURE_STATUS` and `FEATURE_TEAM`; keep `PROGRAM_INCREMENT` for points-by-PI. A stray story shows up as a row with `SPRINT_COUNT` = 1.
+
 ### Feature Burn-Up
 
 A long-format date-event dataset built from `FeatureBurnup.sql` (Feature rows of the epic summary source, with `SUMMARY` pulled from the Customer Epic level):
@@ -199,6 +205,8 @@ A derived view from epics data that maps features and sub-capabilities to their 
 ### Sprint Range
 
 Parses `SPRINT_NAME` (e.g., `"Team Alpha PI 26.1.2"`) to extract the sprint version and computes `MIN_SPRINT` / `MAX_SPRINT` per `SNAPSHOT_DATE` + `PROGRAM_INCREMENT`. The `IP` (Innovation & Planning) sprint sorts as the highest value in each PI.
+Only sprints that belong to the row's own PI count toward its range (a story tagged `PI 26.1` but worked in sprint `26.2.1` is ignored, with a warning), and an unparseable sprint name gives a null range instead of `0.0.0`.
+Each epic row also carries `SPRINT_NAMES`, the sprint names its PI's range was built from, in sprint order.
 
 ## Interactive SQL Query Mode
 

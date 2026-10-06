@@ -277,8 +277,137 @@ def test_prompt_guard_and_spinner_pause() -> None:
     check("guard: spinner_paused() no-ops cleanly without a spinner", True)
 
 
+def test_sprint_lookup_guards() -> None:
+    """Epics sprint lookups: only a PI's own sprints, unparseable names
+    ignored (not "0.0.0"), no row fan-out downstream, no current sprint."""
+    from conversion.epics_table import data_functions, build_sprint_lookups
+
+    now = datetime.now()
+    day = timedelta(days=1)
+    # One story tagged "PI 26.1" sits in sprint 26.2.1 (the stray row); that
+    # sprint and 26.1.IP both contain today. "(extended)" cannot be parsed.
+    sprints = pl.DataFrame({
+        "PROGRAM_INCREMENT": ["PI 26.1", "PI 26.1", "PI 26.1", "PI 26.1", "PI 26.2", "PI 26.3"],
+        "SPRINT_NAME": ["AMMM 26.1.1", "AMMM 26.1.2", "AMMM 26.1.IP", "AMMM 26.2.1",
+                        "AMMM 26.2.1", "AMMM 26.3.1 (extended)"],
+        "BEGIN_DATE": [now - 40 * day, now - 25 * day, now - 10 * day, now - 5 * day,
+                       now - 5 * day, now + 60 * day],
+        "END_DATE": [now - 26 * day, now - 11 * day, now + 4 * day, now + 9 * day,
+                     now + 9 * day, now + 74 * day],
+    })
+    history = sprints.head(0).with_columns(pl.lit(now.date()).alias("SNAPSHOT_DATE"))
+    hist_lookup, sum_lookup = build_sprint_lookups(history, sprints)
+
+    pi1 = sum_lookup.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.1")
+    pi1_range = (pi1["MIN_SPRINT"].item(), pi1["MAX_SPRINT"].item())
+    check("sprint guard: PI 26.1 range stays inside 26.1",
+          pi1_range == ("26.1.1", "26.1.IP"), detail=str(pi1_range))
+    names = pi1["SPRINT_NAMES"].item()
+    check("sprint names: the PI's own sprints in sprint order, stray sprint excluded",
+          names == "AMMM 26.1.1, AMMM 26.1.2, AMMM 26.1.IP", detail=str(names))
+    pi3 = sum_lookup.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.3")
+    pi3_range = (pi3["MIN_SPRINT"].item(), pi3["MAX_SPRINT"].item())
+    check("sprint guard: unparseable sprint name gives a null range, not 0.0.0",
+          pi3_range == (None, None), detail=str(pi3_range))
+    check("sprint names: an unparseable sprint name is still visible",
+          pi3["SPRINT_NAMES"].item() == "AMMM 26.3.1 (extended)", detail=str(pi3["SPRINT_NAMES"].item()))
+
+    epics = pl.DataFrame({
+        "EPIC_KEY": ["E1"], "FEATURE_KEY": ["F1"], "PROGRAM_INCREMENT": ["PI 26.1"],
+        "SNAPSHOT_DATE": pl.Series([None], dtype=pl.Date),
+    })
+    out = data_functions(epics, hist_lookup, sum_lookup)
+    check("sprint guard: data_functions keeps one row per epic (no fan-out)",
+          out.height == 1, detail=f"rows={out.height}")
+    check("sprint guard: no Current Sprint column; Max Sprint from the PI's own sprints",
+          "Current Sprint" not in out.columns and out["Max Sprint"].item() == "26.1.IP",
+          detail=f"sprint cols={[c for c in out.columns if 'Sprint' in c]}")
+    check("sprint names: Sprint Names reaches the epic row",
+          out["Sprint Names"].item() == "AMMM 26.1.1, AMMM 26.1.2, AMMM 26.1.IP",
+          detail=str(out["Sprint Names"].item()))
+
+
+def test_feature_pi_counts_features_by_their_own_pi() -> None:
+    """PROGRAM_INCREMENT on an epic row comes from the feature's stories, so a
+    feature appears under every PI any of its stories is tagged with. Counting
+    features by that column overcounts; FEATURE_PI (the feature's own field)
+    must pass through untouched so Tableau can count by it instead."""
+    from conversion.epics_table import data_functions, build_sprint_lookups, join_agile
+    from conversion.shared import union_data
+
+    # 10 Done features whose own PI is 26.1, plus a 26.2 feature with one
+    # stale-tagged story and a 25.4 feature with one story carried into 26.1
+    keys = [f"F{i:02d}" for i in range(1, 11)] + ["F11", "F12"]
+    epics = pl.DataFrame({
+        "EPIC_KEY": ["E-" + k for k in keys], "FEATURE_KEY": keys,
+        "FEATURE_PI": ["PI 26.1"] * 10 + ["PI 26.2", "PI 25.4"],
+        "FEATURE_STATUS": ["Done"] * 12, "FEATURE_TEAM": ["Team A"] * 12,
+    })
+    rollup = pl.DataFrame({
+        "FEATURE_ID": keys + ["F11", "F12"],
+        "PROGRAM_INCREMENT": ["PI 26.1"] * 10 + ["PI 26.2", "PI 25.4", "PI 26.1", "PI 26.1"],
+        "TOTAL_ESTIMATE": [8.0] * 10 + [5.0, 8.0, 2.0, 1.0],
+        "SPRINT_COUNT": [2] * 10 + [1, 1, 1, 1],
+    })
+    sprints = pl.DataFrame({
+        "PROGRAM_INCREMENT": ["PI 26.1", "PI 26.2", "PI 25.4"],
+        "SPRINT_NAME": ["AMMM 26.1.2", "AMMM 26.2.1", "AMMM 25.4.5"],
+        "BEGIN_DATE": [datetime(2026, 4, 1), datetime(2026, 5, 1), datetime(2026, 3, 4)],
+        "END_DATE": [datetime(2026, 4, 14), datetime(2026, 5, 14), datetime(2026, 3, 17)],
+    })
+    no_snapshot = pl.lit(None).cast(pl.Date).alias("SNAPSHOT_DATE")
+    df = join_agile(epics, rollup, has_snapshot=False)
+    df = union_data(df, df.head(0).with_columns(no_snapshot))
+    hist_lookup, sum_lookup = build_sprint_lookups(sprints.head(0).with_columns(no_snapshot), sprints)
+    out = data_functions(df, hist_lookup, sum_lookup)
+
+    by_story_pi = out.filter(pl.col("Program Increment") == "PI 26.1")["Feature Key"].n_unique()
+    check("feature count: by story-derived Program Increment a feature shows in every PI its stories touch (12)",
+          by_story_pi == 12, detail=f"got {by_story_pi}")
+    by_own_pi = out.filter((pl.col("Feature Pi") == "PI 26.1")
+                           & (pl.col("Feature Status") == "Done"))["Feature Key"].n_unique()
+    check("feature count: by the feature's own Feature Pi it is exactly the 10 Done features",
+          by_own_pi == 10, detail=f"got {by_own_pi}")
+    strays = out.filter((pl.col("Program Increment") == "PI 26.1") & (pl.col("Feature Pi") != "PI 26.1"))
+    check("feature count: the two extras are the stray-story rows (Sprint Count 1)",
+          sorted(strays["Feature Key"].to_list()) == ["F11", "F12"]
+          and strays["Sprint Count"].unique().to_list() == [1],
+          detail=str(strays.select(["Feature Key", "Sprint Count"]).rows()))
+
+
+def test_export_csv_round_trips() -> None:
+    """--csv: the CSV carries the same columns and rows as the frame, in a
+    folder that is created on demand, readable back with the BOM stripped."""
+    import tempfile
+    from pathlib import Path
+    from conversion.shared import export_csv
+
+    df = pl.DataFrame({
+        "Feature Key": ["F-1", "F-2"],
+        "Snapshot Date": [datetime(2026, 4, 6).date(), None],
+        "Last Updated": [datetime(2026, 4, 6, 10, 30), datetime(2026, 4, 6, 10, 30)],
+        "Bv": [10.0, None],
+        "Sprint Names": ["AMMM 26.1.1, AMMM 26.1.2", None],
+        "Is Synthetic": [False, True],
+    })
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "csv" / "EPICS.csv"
+        export_csv(df, path)
+        check("csv: folder created and file written", path.is_file())
+        check("csv: starts with a UTF-8 BOM for Excel", path.read_bytes()[:3] == b"\xef\xbb\xbf")
+        back = pl.read_csv(path)
+        check("csv: same columns in the same order", back.columns == df.columns, detail=str(back.columns))
+        check("csv: same row count", back.height == 2)
+        check("csv: comma inside a value survives quoting",
+              back["Sprint Names"][0] == "AMMM 26.1.1, AMMM 26.1.2", detail=str(back["Sprint Names"][0]))
+        check("csv: nulls come back empty", back["Bv"][1] is None and back["Snapshot Date"][1] is None)
+
+
 def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
+    test_sprint_lookup_guards()
+    test_feature_pi_counts_features_by_their_own_pi()
+    test_export_csv_round_trips()
     test_supertype_rules()
     test_align_schemas_unifies_datetime_units()
     test_align_schemas_handles_missing_and_mixed_dtypes()
