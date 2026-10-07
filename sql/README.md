@@ -28,4 +28,13 @@ SQL query files executed by the ETL pipelines against the Tibco database.
 - Filenames are referenced in `config.yaml` under each pipeline's section (`sql_summary`, `sql_history_full`, `sql_history_recent`, etc.)
 - History queries must return a `SNAPSHOT_DATE` column and the pipeline's key column (e.g., `STORY_NUMBER`, `FEATURE_KEY`)
 - The epic queries use a CTE hierarchy: feature -> subcapability -> customercapability -> customerepic. The Epic level is commented out so each feature is one row (joining epics repeated the feature once per child epic)
+- Planned-end naming is intentional — do not "correct" it:
+
+  | Query | Database column | Output column |
+  |-------|-----------------|---------------|
+  | Epic queries (summary + history) | `TARGET_END` | `PLANNED_END` |
+  | Epic queries (summary + history) | `PLANNED_END_DATE` | `BASELINE_PLANNED_END` |
+  | `FeatureBurnup.sql` | `PLANNED_END` | `PLANNED_END` (raw name, not renamed) |
+
+  The epics substitute `TARGET_END` as their planned end; the burn-up uses the real `PLANNED_END`. `PLANNED_END_DATE` exists in both `AMMM_JIRA_EPIC_SUMMARY` and `AMMM_JIRA_EPIC_HISTORY`.
 - `ORDER BY` clauses in these queries do not affect pipeline logic — they are for manual inspection only
