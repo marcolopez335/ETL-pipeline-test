@@ -1,6 +1,6 @@
 """Lightweight regression tests for the pure-Polars helpers in conversion.shared.
 
-Designed to run in CI without the proprietary `common` package — each helper
+Designed to run in CI without the proprietary `csm_commonlib` package — each helper
 under test is imported lazily and only the pure-Polars surface is exercised.
 Run with: ``python test_fill_snapshots.py``.
 """

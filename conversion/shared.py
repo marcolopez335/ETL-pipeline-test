@@ -6,11 +6,11 @@ from pathlib import Path
 import polars as pl
 import yaml
 
-# common.* and the rich-driven console module are imported lazily so this
+# csm_commonlib.* and the rich-driven console module are imported lazily so this
 # module can be imported (and its pure-Polars helpers tested) without the
-# proprietary `common` package or the rich runtime.
+# proprietary `csm_commonlib` package or the rich runtime.
 try:
-    from common.logging import get_logger
+    from csm_commonlib.logging import get_logger
 except ImportError:  # pragma: no cover — fallback for unit-test environments
     import logging
     def get_logger(name: str) -> logging.Logger:
@@ -120,7 +120,7 @@ def run_query(
     sql_filename: str, database: str = "default", verbose: bool = True,
     config: dict | None = None,
 ) -> pl.DataFrame:
-    from common.database.tibco import TibcoConnection
+    from csm_commonlib.database.tibco import TibcoConnection
     logger.info(f"Running query: {sql_filename}")
     query = load_sql(sql_filename)
     conn = TibcoConnection()
@@ -154,7 +154,7 @@ def run_query(
 
 
 def test_connection(database: str = "default", config: dict | None = None) -> bool:
-    from common.database.tibco import TibcoConnection
+    from csm_commonlib.database.tibco import TibcoConnection
     logger.info("Testing database connection")
     conn = TibcoConnection()
     try:
@@ -726,14 +726,14 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict,
                  If None, publishes to all configured servers.
         datasource_name: Name of the datasource on Tableau Server.
     """
-    from common.tableau.publish import publish_hyper_to_tableau
+    from csm_commonlib.tableau.publish import publish_hyper_to_tableau
     # tableau_session is a context manager that signs in, yields a connected
-    # TSC.Server, and signs out on exit. Import path may differ across common
+    # TSC.Server, and signs out on exit. Import path may differ across csm_commonlib
     # versions — try the dedicated session module, then the publish module.
     try:
-        from common.tableau.session import tableau_session
+        from csm_commonlib.tableau.session import tableau_session
     except ImportError:
-        from common.tableau.publish import tableau_session
+        from csm_commonlib.tableau.publish import tableau_session
 
     tab_cfg = config["tableau"]
 

@@ -51,7 +51,7 @@ python -m venv .odbcenv
 pip install -r requirements.txt
 ```
 
-> Requires the internal `common` package for database connectivity, logging, and Tableau publishing.
+> Requires the internal `csm_commonlib` package for database connectivity, logging, and Tableau publishing.
 
 ## Configuration
 

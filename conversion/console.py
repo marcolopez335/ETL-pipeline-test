@@ -69,7 +69,7 @@ _prompt_guard_installed = False
 def install_prompt_guard() -> None:
     """Make every input()/getpass() prompt pause the spinner automatically.
 
-    Credential prompts can fire deep inside the `common` package where we
+    Credential prompts can fire deep inside the `csm_commonlib` package where we
     can't wrap them at the call site — so wrap the functions themselves.
     The prompt gets a clean line; animation resumes when it returns.
     Idempotent; safe to call once at startup.

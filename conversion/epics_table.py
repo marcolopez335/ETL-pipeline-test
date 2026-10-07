@@ -3,7 +3,7 @@ from datetime import datetime
 import polars as pl
 from schemas.datatypes import EXPECTED_DTYPES_EPICS
 # get_logger comes via shared so this module stays importable (and testable)
-# without the proprietary `common` package
+# without the proprietary `csm_commonlib` package
 from conversion.shared import (
     OUTPUT_DIR, drop_todays_history, get_cache_path, get_logger, run_query, clean_dtypes, update_history,
     union_data, export_csv, export_hyper, get_csv_path, log_dataframe_summary,

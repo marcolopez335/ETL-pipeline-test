@@ -3,7 +3,7 @@ from logging import WARNING
 from pathlib import Path
 
 import polars as pl
-from common.logging import get_logger, setup_logging
+from csm_commonlib.logging import get_logger, setup_logging
 
 from conversion import shared
 from conversion.shared import test_connection, load_config
@@ -28,7 +28,7 @@ setup_logging(
 )
 logger = get_logger(__name__)
 
-# Any input()/getpass() prompt (e.g. credential re-entry inside the common
+# Any input()/getpass() prompt (e.g. credential re-entry inside the csm_commonlib
 # package) pauses the spinner and gets a clean line.
 install_prompt_guard()
 
