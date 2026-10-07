@@ -609,8 +609,35 @@ def test_rebuild_cache_and_column_drift_warning() -> None:
             shared.BACKUP_DIR = old_backup_dir
 
 
+def test_runtime_strings_are_ascii() -> None:
+    """Every string the code can print or log must be ASCII: legacy Windows
+    consoles (cp437 / cp1252) raise UnicodeEncodeError on em dashes, arrows,
+    check marks and the like (see 0915732). Docstrings are exempt -- they are
+    never written to the console."""
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    offenders = []
+    for path in [root / "main.py", *sorted((root / "conversion").glob("*.py"))]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        docstrings = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                body = getattr(node, "body", [])
+                if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant):
+                    docstrings.add(id(body[0].value))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and id(node) not in docstrings and not node.value.isascii()):
+                offenders.append(f"{path.name}:{node.lineno} {node.value[:40]!r}")
+    check("console: every runtime string literal is ASCII (Windows cp437-safe)",
+          not offenders, detail="; ".join(offenders))
+
+
 def main() -> int:
     test_get_last_n_snapshots_returns_requested_weekday()
+    test_runtime_strings_are_ascii()
     test_drop_todays_history_prevents_double_count()
     test_sprint_lookup_guards()
     test_feature_pi_counts_features_by_their_own_pi()

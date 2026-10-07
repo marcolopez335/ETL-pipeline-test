@@ -671,7 +671,7 @@ def drop_todays_history(df_history: pl.DataFrame) -> pl.DataFrame:
     dropped = before - df_history.height
     if dropped:
         logger.info(
-            f"Dropped {dropped} history rows dated {today} — summary supplies today's rows"
+            f"Dropped {dropped} history rows dated {today}; summary supplies today's rows"
         )
     return df_history
 
