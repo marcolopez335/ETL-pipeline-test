@@ -131,7 +131,6 @@ python main.py [pipeline] [action] [options]
 | Flag | Description |
 |------|-------------|
 | `--force` | Bypass cache shrinkage safety check (use if cache needs to shrink) |
-| `--rebuild-cache` | Ignore the existing history cache and reseed it from the full history query (old cache is backed up). Run once after a history SQL file gains/loses a column or changes its key — the run warns when it detects this |
 | `--verbose` | Show full per-column stats tables after each step (slower at large row counts) |
 | `--csv` | Also write each exported table as a CSV (same columns as the `.hyper`) into `paths.csv_dir`, default `output/csv/` |
 
@@ -159,9 +158,6 @@ python main.py --epics --query
 # Publish both pipelines to production
 python main.py --publish-prd
 
-# Reseed the epics history cache after changing the epic queries
-python main.py --epics --rebuild-cache
-
 # Publish to the external server (always requires the explicit flag)
 python main.py --publish-external
 
@@ -186,7 +182,7 @@ Flags can be combined freely: `python main.py --stories --publish-tst --query`
 
 ### Epics
 
-The epic queries return **one row per feature** (per snapshot for history). The Epic level is commented out in the SQL because joining it repeated each feature once per child epic, inflating feature estimates. The history cache is keyed on `FEATURE_KEY`; a cache built before this change is epic-grain, so reseed it once with `--rebuild-cache`.
+The epic queries return **one row per feature** (per snapshot for history). The Epic level is commented out in the SQL because joining it repeated each feature once per child epic, inflating feature estimates. The history cache is keyed on `FEATURE_KEY`; a cache built before this change is epic-grain, so delete `cache/epics_history_cache.parquet` once and the next run reseeds it from the full history query. (The run also warns whenever a history query gains or loses a column compared with the cache; same fix.)
 
 1. Fetch summary data and history snapshots from Tibco
 2. Update incremental history cache
