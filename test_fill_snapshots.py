@@ -423,52 +423,83 @@ def test_sprint_lookup_guards() -> None:
           detail=str(out["Sprint Names"].item()))
 
 
-def test_feature_pi_counts_features_by_their_own_pi() -> None:
-    """PROGRAM_INCREMENT on an epic row comes from the feature's stories, so a
-    feature appears under every PI any of its stories is tagged with. Counting
-    features by that column overcounts; FEATURE_PI (the feature's own field)
-    must pass through untouched so Tableau can count by it instead."""
-    from conversion.epics_table import data_functions, build_sprint_lookups, join_agile
+def test_agile_rollup_collapses_to_one_row_per_feature() -> None:
+    """The agile rollup is grouped by feature + story PI, so a feature whose
+    stories touch several PIs got several almost identical EPICS rows (feature
+    estimate / BV repeated on each). Now the rollup is summed per feature
+    before the join: exactly one row per feature per snapshot, exact story
+    point totals, and the per-PI split kept as columns."""
+    from conversion.epics_table import (
+        build_sprint_lookups, collapse_agile, data_functions, join_agile,
+    )
     from conversion.shared import union_data
 
-    # 10 Done features whose own PI is 26.1, plus a 26.2 feature with one
-    # stale-tagged story and a 25.4 feature with one story carried into 26.1
-    keys = [f"F{i:02d}" for i in range(1, 11)] + ["F11", "F12"]
+    # F1: 41 stories in its own PI 26.1, 1 stray in 25.4, 3 unscheduled (no PI)
+    # F2: all 5 stories in its own PI       F3: no stories at all
     epics = pl.DataFrame({
-        "EPIC_KEY": ["E-" + k for k in keys], "FEATURE_KEY": keys,
-        "FEATURE_PI": ["PI 26.1"] * 10 + ["PI 26.2", "PI 25.4"],
-        "STATUS": ["Done"] * 12, "FEATURE_TEAM": ["Team A"] * 12,
+        "FEATURE_KEY": ["F1", "F2", "F3"], "FEATURE_PI": ["PI 26.1"] * 3,
+        "FEATURE_ESTIMATE": [8.0, 5.0, 3.0], "BV": [10.0, 20.0, 30.0], "STATUS": ["Done"] * 3,
     })
     rollup = pl.DataFrame({
-        "FEATURE_ID": keys + ["F11", "F12"],
-        "PROGRAM_INCREMENT": ["PI 26.1"] * 10 + ["PI 26.2", "PI 25.4", "PI 26.1", "PI 26.1"],
-        "TOTAL_ESTIMATE": [8.0] * 10 + [5.0, 8.0, 2.0, 1.0],
-        "SPRINT_COUNT": [2] * 10 + [1, 1, 1, 1],
+        "FEATURE_ID": ["F1", "F1", "F1", "F2"],
+        "PROGRAM_INCREMENT": ["PI 26.1", "PI 25.4", None, "PI 26.1"],
+        "TOTAL_ESTIMATE": [6.0, 1.0, 1.0, 5.0], "DONE_ESTIMATE": [6.0, 1.0, 0.0, 5.0],
+        "OPEN_ESTIMATE": [0.0, 0.0, 1.0, 0.0], "SPRINT_COUNT": [41, 1, 3, 5],
+        "BEGIN_DATE": [datetime(2026, 8, 12), datetime(2025, 11, 12), None, datetime(2026, 8, 12)],
+        "END_DATE": [datetime(2026, 9, 30), datetime(2025, 11, 26), None, datetime(2026, 9, 30)],
     })
-    sprints = pl.DataFrame({
-        "PROGRAM_INCREMENT": ["PI 26.1", "PI 26.2", "PI 25.4"],
-        "SPRINT_NAME": ["AMMM 26.1.2", "AMMM 26.2.1", "AMMM 25.4.5"],
-        "BEGIN_DATE": [datetime(2026, 4, 1), datetime(2026, 5, 1), datetime(2026, 3, 4)],
-        "END_DATE": [datetime(2026, 4, 14), datetime(2026, 5, 14), datetime(2026, 3, 17)],
-    })
+    collapsed = collapse_agile(rollup, epics, has_snapshot=False)
+    check("collapse: one agile row per feature", collapsed.height == 2
+          and collapsed["FEATURE_ID"].to_list() == ["F1", "F2"], detail=str(collapsed))
+    f1 = collapsed.filter(pl.col("FEATURE_ID") == "F1").row(0, named=True)
+    check("collapse: story points are the exact total across every PI",
+          (f1["TOTAL_ESTIMATE"], f1["DONE_ESTIMATE"], f1["OPEN_ESTIMATE"], f1["SPRINT_COUNT"])
+          == (8.0, 7.0, 1.0, 45), detail=str(f1))
+    check("collapse: in-PI / off-PI split kept as columns",
+          (f1["TOTAL_IN_FEATURE_PI"], f1["DONE_IN_FEATURE_PI"], f1["OFF_PI_ESTIMATE"], f1["PI_COUNT"])
+          == (6.0, 6.0, 2.0, 2) and f1["STORY_PIS"] == "PI 25.4, PI 26.1", detail=str(f1))
+    check("collapse: earliest begin / latest end date",
+          f1["BEGIN_DATE"] == datetime(2025, 11, 12) and f1["END_DATE"] == datetime(2026, 9, 30))
+
+    # PI number match tolerates "26.1" vs "PI 26.1"
+    alt = collapse_agile(rollup, epics.with_columns(pl.lit("26.1").alias("FEATURE_PI")), has_snapshot=False)
+    check("collapse: PI match on the PI number, not the exact text",
+          alt.filter(pl.col("FEATURE_ID") == "F1")["TOTAL_IN_FEATURE_PI"].item() == 6.0)
+
     no_snapshot = pl.lit(None).cast(pl.Date).alias("SNAPSHOT_DATE")
-    df = join_agile(epics, rollup, has_snapshot=False)
+    df = join_agile(epics, collapsed, has_snapshot=False)
     df = union_data(df, df.head(0).with_columns(no_snapshot))
+    sprints = pl.DataFrame({
+        "PROGRAM_INCREMENT": ["PI 26.1"], "SPRINT_NAME": ["AMMM 26.1.2"],
+        "BEGIN_DATE": [datetime(2026, 4, 1)], "END_DATE": [datetime(2026, 4, 14)],
+    })
     hist_lookup, sum_lookup = build_sprint_lookups(sprints.head(0).with_columns(no_snapshot), sprints)
     out = data_functions(df, hist_lookup, sum_lookup)
 
-    by_story_pi = out.filter(pl.col("Program Increment") == "PI 26.1")["Feature Key"].n_unique()
-    check("feature count: by story-derived Program Increment a feature shows in every PI its stories touch (12)",
-          by_story_pi == 12, detail=f"got {by_story_pi}")
-    by_own_pi = out.filter((pl.col("Feature Pi") == "PI 26.1")
-                           & (pl.col("Status") == "Done"))["Feature Key"].n_unique()
-    check("feature count: by the feature's own Feature Pi it is exactly the 10 Done features",
-          by_own_pi == 10, detail=f"got {by_own_pi}")
-    strays = out.filter((pl.col("Program Increment") == "PI 26.1") & (pl.col("Feature Pi") != "PI 26.1"))
-    check("feature count: the two extras are the stray-story rows (Sprint Count 1)",
-          sorted(strays["Feature Key"].to_list()) == ["F11", "F12"]
-          and strays["Sprint Count"].unique().to_list() == [1],
-          detail=str(strays.select(["Feature Key", "Sprint Count"]).rows()))
+    check("epics: exactly one row per feature, no feature dropped (F3 has no stories)",
+          out.height == 3 and out["Feature Key"].n_unique() == 3, detail=f"rows={out.height}")
+    check("epics: Program Increment is the feature's own PI on every row",
+          out["Program Increment"].unique().to_list() == ["PI 26.1"])
+    check("epics: plain SUM of a feature-level field is exact (BV 60, estimate 16)",
+          out["Bv"].sum() == 60.0 and out["Feature Estimate"].sum() == 16.0)
+    check("epics: sprint range still resolves via the feature's PI",
+          out["Max Sprint"].unique().to_list() == ["26.1.2"], detail=str(out["Max Sprint"].to_list()))
+    check("epics: feature with no stories keeps null story points",
+          out.filter(pl.col("Feature Key") == "F3")["Total Estimate"].item() is None)
+
+    # History: collapse is per feature AND snapshot
+    hist_rollup = pl.concat([
+        rollup.with_columns(pl.lit(datetime(2026, 9, 28).date()).alias("SNAPSHOT_DATE")),
+        rollup.with_columns(pl.lit(datetime(2026, 10, 5).date()).alias("SNAPSHOT_DATE")),
+    ])
+    hist_epics = pl.concat([
+        epics.with_columns(pl.lit(datetime(2026, 9, 28).date()).alias("SNAPSHOT_DATE")),
+        epics.with_columns(pl.lit(datetime(2026, 10, 5).date()).alias("SNAPSHOT_DATE")),
+    ])
+    hc = collapse_agile(hist_rollup, hist_epics, has_snapshot=True)
+    check("collapse (history): one row per feature per snapshot",
+          hc.height == 4 and hc.group_by("SNAPSHOT_DATE").len()["len"].to_list() == [2, 2],
+          detail=str(hc.select(["FEATURE_ID", "SNAPSHOT_DATE"])))
 
 
 def test_export_csv_round_trips() -> None:
@@ -640,7 +671,7 @@ def main() -> int:
     test_runtime_strings_are_ascii()
     test_drop_todays_history_prevents_double_count()
     test_sprint_lookup_guards()
-    test_feature_pi_counts_features_by_their_own_pi()
+    test_agile_rollup_collapses_to_one_row_per_feature()
     test_export_csv_round_trips()
     test_rebuild_cache_and_column_drift_warning()
     test_schemas_match_sql_and_parse_string_dates()

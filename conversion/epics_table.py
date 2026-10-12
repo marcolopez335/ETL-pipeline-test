@@ -257,14 +257,88 @@ def fetch_agile(config: dict, history: bool = True) -> pl.DataFrame:
     return df
 
 
-def join_agile(df: pl.DataFrame, df_agile: pl.DataFrame, has_snapshot: bool = True) -> pl.DataFrame:
-    """Join agile sprint data onto epics at the feature level.
+# Agile rollup measures that are summed when the per-PI rows collapse to one
+# row per feature. BEGIN_DATE takes the earliest and END_DATE the latest.
+AGILE_SUM_COLUMNS = ["TOTAL_ESTIMATE", "DONE_ESTIMATE", "OPEN_ESTIMATE", "SPRINT_COUNT"]
 
-    Agile data is aggregated per FEATURE_ID + PROGRAM_INCREMENT (+ SNAPSHOT_DATE
-    for history), so this is a many-to-one join from epics — no fan-out.
+
+def collapse_agile(df_agile: pl.DataFrame, feature_pi: pl.DataFrame,
+                   has_snapshot: bool = True) -> pl.DataFrame:
+    """Collapse the agile rollup to one row per feature (per snapshot for history).
+
+    AgileSummary.sql / AgileHistory.sql group story points by FEATURE_ID and
+    PROGRAM_INCREMENT, so a feature whose stories carry several PI tags (a
+    stale tag, a story carried into the next PI, unscheduled stories with no
+    PI) gets one rollup row per PI -- and joining that onto the epics fanned
+    each feature out into several almost identical rows. Here the rollup is
+    summed across every PI first, so every feature joins to exactly one row
+    and its story points are the exact total for the feature.
+
+    The per-PI split is kept as columns rather than rows:
+    TOTAL_IN_FEATURE_PI / DONE_IN_FEATURE_PI are the points from stories in
+    the feature's own PI (``FEATURE_PI``, matched on the PI number so
+    "PI 26.1" and "26.1" agree), OFF_PI_ESTIMATE is everything else,
+    PI_COUNT is how many distinct PIs the stories touched (1 = fully on
+    plan) and STORY_PIS lists them. ``feature_pi`` is the epic frame's
+    FEATURE_KEY (+ SNAPSHOT_DATE) -> FEATURE_PI lookup.
+    """
+    keys = ["FEATURE_ID", "SNAPSHOT_DATE"] if has_snapshot else ["FEATURE_ID"]
+    if df_agile.height == 0:
+        return df_agile.drop("PROGRAM_INCREMENT", strict=False)
+
+    pi_keys = ["FEATURE_KEY", "SNAPSHOT_DATE"] if has_snapshot else ["FEATURE_KEY"]
+    if "FEATURE_PI" in feature_pi.columns:
+        lookup = (
+            feature_pi.select(pi_keys + ["FEATURE_PI"]).unique(subset=pi_keys, keep="first")
+            .rename({"FEATURE_KEY": "FEATURE_ID"})
+        )
+        df_agile = df_agile.join(lookup, on=keys, how="left")
+    else:
+        df_agile = df_agile.with_columns(pl.lit(None, dtype=pl.Utf8).alias("FEATURE_PI"))
+
+    pi_number = lambda col: pl.col(col).cast(pl.Utf8).str.extract(PI_NUMBER_PATTERN)
+    in_pi = (pi_number("PROGRAM_INCREMENT") == pi_number("FEATURE_PI")).fill_null(False)
+    present = [c for c in AGILE_SUM_COLUMNS if c in df_agile.columns]
+
+    aggs = [pl.col(c).sum().alias(c) for c in present]
+    if "BEGIN_DATE" in df_agile.columns:
+        aggs.append(pl.col("BEGIN_DATE").min())
+    if "END_DATE" in df_agile.columns:
+        aggs.append(pl.col("END_DATE").max())
+    if "TOTAL_ESTIMATE" in present:
+        aggs.append(pl.col("TOTAL_ESTIMATE").filter(in_pi).sum().alias("TOTAL_IN_FEATURE_PI"))
+    if "DONE_ESTIMATE" in present:
+        aggs.append(pl.col("DONE_ESTIMATE").filter(in_pi).sum().alias("DONE_IN_FEATURE_PI"))
+    aggs += [
+        pl.col("PROGRAM_INCREMENT").drop_nulls().n_unique().alias("PI_COUNT"),
+        pl.col("PROGRAM_INCREMENT").cast(pl.Utf8).drop_nulls().unique().sort()
+          .str.join(", ").alias("STORY_PIS"),
+    ]
+    out = df_agile.group_by(keys, maintain_order=True).agg(aggs)
+    if "TOTAL_IN_FEATURE_PI" in out.columns:
+        out = out.with_columns(
+            (pl.col("TOTAL_ESTIMATE") - pl.col("TOTAL_IN_FEATURE_PI")).alias("OFF_PI_ESTIMATE")
+        )
+
+    collapsed = df_agile.height - out.height
+    if collapsed:
+        logger.info(
+            f"Agile rollup: {df_agile.height} feature/PI rows collapsed to {out.height} "
+            f"feature rows ({collapsed} extra PI rows summed in)"
+        )
+    return out
+
+
+def join_agile(df: pl.DataFrame, df_agile: pl.DataFrame, has_snapshot: bool = True) -> pl.DataFrame:
+    """Join the collapsed agile rollup onto the epics at the feature level.
+
+    ``df_agile`` holds one row per FEATURE_ID (+ SNAPSHOT_DATE for history),
+    see collapse_agile, so this is a one-to-one join -- no fan-out. The
+    row's PROGRAM_INCREMENT is the feature's own PI (FEATURE_PI), which is
+    also what the sprint range lookups key on.
     """
     if has_snapshot:
-        return df.join(
+        df = df.join(
             df_agile,
             left_on=["FEATURE_KEY", "SNAPSHOT_DATE"],
             right_on=["FEATURE_ID", "SNAPSHOT_DATE"],
@@ -272,13 +346,18 @@ def join_agile(df: pl.DataFrame, df_agile: pl.DataFrame, has_snapshot: bool = Tr
             suffix="_agile",
         )
     else:
-        return df.join(
+        df = df.join(
             df_agile,
             left_on=["FEATURE_KEY"],
             right_on=["FEATURE_ID"],
             how="left",
             suffix="_agile",
         )
+    if "FEATURE_PI" in df.columns:
+        df = df.with_columns(pl.col("FEATURE_PI").alias("PROGRAM_INCREMENT"))
+    elif "PROGRAM_INCREMENT" not in df.columns:
+        df = df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("PROGRAM_INCREMENT"))
+    return df
 
 
 def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
@@ -398,9 +477,11 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
             build_sprint_lookups(fetched["sprint_range"], fetched["sprint_range_summary"])
         # Ensure SNAPSHOT_DATE is Date on both sides before joining
         df_history = df_history.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
-        # Join agile history onto epic history (by FEATURE_KEY + SNAPSHOT_DATE)
+        # One agile row per feature (per snapshot): sum the per-PI rollup rows
+        # so the join cannot fan a feature out, then join on FEATURE_KEY
+        df_agile_history = collapse_agile(df_agile_history, df_history, has_snapshot=True)
+        df_agile_summary = collapse_agile(df_agile_summary, df_summary, has_snapshot=False)
         df_history = join_agile(df_history, df_agile_history, has_snapshot=True)
-        # Join agile summary onto epic summary (by FEATURE_KEY only, no snapshot)
         df_summary = join_agile(df_summary, df_agile_summary, has_snapshot=False)
 
     with step_spinner(5, total, "Unioning & transforming"):
