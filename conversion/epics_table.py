@@ -142,6 +142,52 @@ def _build_sprint_lookup(df: pl.DataFrame, partition_cols: list[str]) -> pl.Data
     return lookup
 
 
+def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str],
+                                 reference: pl.Expr) -> pl.DataFrame:
+    """CURRENT_SPRINT per partition: the sprint whose BEGIN_DATE-END_DATE
+    contains ``reference`` (today for the summary, the row's SNAPSHOT_DATE
+    for history, so each snapshot shows the sprint that was running then).
+
+    Sprint dates are entered by hand and can overlap on a given day, so the
+    result is collapsed to exactly one sprint per partition (the latest
+    version wins). One value per PI, joined on the feature's own PI, so it
+    cannot fan a feature row out. Null when the PI isn't running on that
+    date (finished or future PI) or no sprint name parses.
+    """
+    needed = {"SPRINT_NAME", "BEGIN_DATE", "END_DATE"}
+    if df.height == 0 or not needed <= set(df.columns):
+        # Empty lookup with the partition columns' own dtypes so the join still works
+        empty = df.head(0).select([c for c in partition_cols if c in df.columns])
+        for c in partition_cols:
+            if c not in empty.columns:
+                empty = empty.with_columns(pl.Series(c, [], dtype=pl.Utf8))
+        return empty.with_columns(pl.Series("CURRENT_SPRINT", [], dtype=pl.Utf8))
+
+    lookup = (
+        df.with_columns([
+            pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_NAME_ALT_REGEX).alias("CURRENT_SPRINT"),
+            pl.col("BEGIN_DATE").cast(pl.Date, strict=False).alias("_begin"),
+            pl.col("END_DATE").cast(pl.Date, strict=False).alias("_end"),
+        ])
+        .filter((reference >= pl.col("_begin")) & (reference <= pl.col("_end")))
+        .select(partition_cols + ["CURRENT_SPRINT"]).unique()
+    )
+    candidates = lookup.height
+    lookup = (
+        lookup.with_columns(_sprint_sort_key("CURRENT_SPRINT").alias("_key"))
+        .sort("_key", nulls_last=False)
+        .unique(subset=partition_cols, keep="last", maintain_order=True)
+        .drop("_key")
+    )
+    if lookup.height < candidates:
+        logger.info(
+            f"Current sprint: {candidates - lookup.height} overlapping sprint(s) "
+            f"collapsed to the latest per partition"
+        )
+    logger.info(f"Current sprint lookup ({partition_cols}): {lookup.height} rows")
+    return lookup
+
+
 def _sprints_in_their_own_pi(df: pl.DataFrame) -> pl.DataFrame:
     """Drop sprint-range rows whose sprint belongs to a different PI than the row says.
 
@@ -175,18 +221,26 @@ def build_sprint_lookups(
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Build sprint range lookups from already-fetched sprint range data.
 
-    Returns (history_lookup, summary_lookup). Only sprints that belong to the
-    row's own PI take part.
+    Returns (history_lookup, summary_lookup), each carrying MIN_SPRINT,
+    MAX_SPRINT, SPRINT_NAMES and CURRENT_SPRINT per PI. Only sprints that
+    belong to the row's own PI take part.
     """
     # History: keyed by SNAPSHOT_DATE + PROGRAM_INCREMENT
     if "SNAPSHOT_DATE" in df_hist.columns:
         df_hist = df_hist.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
     df_hist = _sprints_in_their_own_pi(df_hist)
     df_sum = _sprints_in_their_own_pi(df_sum)
-    history_lookup = _build_sprint_lookup(df_hist, SPRINT_PARTITION)
+    history_lookup = _build_sprint_lookup(df_hist, SPRINT_PARTITION).join(
+        _build_current_sprint_lookup(df_hist, SPRINT_PARTITION, reference=pl.col("SNAPSHOT_DATE")),
+        on=SPRINT_PARTITION, how="left",
+    )
 
     # Summary: keyed by PROGRAM_INCREMENT only (no snapshot date)
-    summary_lookup = _build_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"])
+    today = datetime.now().date()
+    summary_lookup = _build_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"]).join(
+        _build_current_sprint_lookup(df_sum, ["PROGRAM_INCREMENT"], reference=pl.lit(today)),
+        on=["PROGRAM_INCREMENT"], how="left",
+    )
 
     return history_lookup, summary_lookup
 
@@ -229,7 +283,8 @@ def data_functions(df: pl.DataFrame, sprint_history_lookup: pl.DataFrame,
         pl.coalesce(["MIN_SPRINT", "MIN_SPRINT_sum"]).alias("MIN_SPRINT"),
         pl.coalesce(["MAX_SPRINT", "MAX_SPRINT_sum"]).alias("MAX_SPRINT"),
         pl.coalesce(["SPRINT_NAMES", "SPRINT_NAMES_sum"]).alias("SPRINT_NAMES"),
-    ]).drop(["MIN_SPRINT_sum", "MAX_SPRINT_sum", "SPRINT_NAMES_sum"])
+        pl.coalesce(["CURRENT_SPRINT", "CURRENT_SPRINT_sum"]).alias("CURRENT_SPRINT"),
+    ]).drop(["MIN_SPRINT_sum", "MAX_SPRINT_sum", "SPRINT_NAMES_sum", "CURRENT_SPRINT_sum"])
 
     # Rename columns: SNAKE_CASE -> Title Case
     rename_map = {

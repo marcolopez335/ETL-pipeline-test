@@ -415,9 +415,36 @@ def test_sprint_lookup_guards() -> None:
     out = data_functions(epics, hist_lookup, sum_lookup)
     check("sprint guard: data_functions keeps one row per epic (no fan-out)",
           out.height == 1, detail=f"rows={out.height}")
-    check("sprint guard: no Current Sprint column; Max Sprint from the PI's own sprints",
-          "Current Sprint" not in out.columns and out["Max Sprint"].item() == "26.1.IP",
-          detail=f"sprint cols={[c for c in out.columns if 'Sprint' in c]}")
+    check("sprint guard: Max Sprint from the PI's own sprints",
+          out["Max Sprint"].item() == "26.1.IP", detail=str(out["Max Sprint"].item()))
+    # Current sprint: 26.1.IP and the stray 26.2.1 both contain today, but the
+    # stray belongs to PI 26.2, so PI 26.1's current sprint is 26.1.IP
+    check("current sprint: the PI's own sprint running today",
+          out["Current Sprint"].item() == "26.1.IP", detail=str(out["Current Sprint"].item()))
+    pi3 = sum_lookup.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.3")
+    check("current sprint: null when the PI is not running today",
+          pi3["CURRENT_SPRINT"].item() is None)
+
+    # Overlapping hand-entered dates: two sprints of PI 26.1 contain today ->
+    # one row per PI (latest version), so the join cannot fan out
+    overlap = pl.concat([sprints, pl.DataFrame({
+        "PROGRAM_INCREMENT": ["PI 26.1"], "SPRINT_NAME": ["AMMM 26.1.2 (extended)"],
+        "BEGIN_DATE": [now - 20 * day], "END_DATE": [now + 2 * day],
+    })])
+    _, ov_lookup = build_sprint_lookups(history, overlap)
+    pi1_ov = ov_lookup.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.1")
+    check("current sprint: overlapping sprints collapse to one row per PI (latest wins)",
+          pi1_ov.height == 1 and pi1_ov["CURRENT_SPRINT"].item() == "26.1.IP",
+          detail=str(pi1_ov["CURRENT_SPRINT"].to_list()))
+    ov_out = data_functions(epics, hist_lookup, ov_lookup)
+    check("current sprint: still one row per epic after the join", ov_out.height == 1)
+
+    # History rows are as-of their snapshot date: a snapshot taken 30 days ago
+    # (inside 26.1.1) shows 26.1.1, not today's sprint
+    hist_sprints = sprints.with_columns(pl.lit((now - 30 * day).date()).alias("SNAPSHOT_DATE"))
+    hist_lookup2, _ = build_sprint_lookups(hist_sprints, sprints)
+    asof = hist_lookup2.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.1")["CURRENT_SPRINT"].item()
+    check("current sprint (history): as-of the snapshot date", asof == "26.1.1", detail=str(asof))
     check("sprint names: Sprint Names reaches the epic row",
           out["Sprint Names"].item() == "AMMM 26.1.1, AMMM 26.1.2, AMMM 26.1.IP",
           detail=str(out["Sprint Names"].item()))

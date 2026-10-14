@@ -219,6 +219,7 @@ A derived view from epics data that maps features and sub-capabilities to their 
 Parses `SPRINT_NAME` (e.g., `"Team Alpha PI 26.1.2"`) to extract the sprint version and computes `MIN_SPRINT` / `MAX_SPRINT` per `SNAPSHOT_DATE` + `PROGRAM_INCREMENT`. The `IP` (Innovation & Planning) sprint sorts as the highest value in each PI.
 Only sprints that belong to the row's own PI count toward its range (a story tagged `PI 26.1` but worked in sprint `26.2.1` is ignored, with a warning), and an unparseable sprint name gives a null range instead of `0.0.0`.
 Each epic row also carries `SPRINT_NAMES`, the sprint names its PI's range was built from, in sprint order.
+`CURRENT_SPRINT` is the sprint of the row's PI that contains the row's date (today for the live row, the snapshot date for history rows), e.g. `26.3.4`; blank when the PI isn't running on that date. Sprint dates are hand-entered and can overlap, so one sprint per PI is kept (the latest version), which keeps EPICS at one row per feature.
 
 ## Interactive SQL Query Mode
 
