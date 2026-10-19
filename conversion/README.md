@@ -39,4 +39,4 @@ History data is cached as parquet in `../cache/`. On each run:
 
 ## ACRP (Active Capability Release Plan)
 
-Built from the epics data. Filters rows where `SNAPSHOT_DATE` is null and either `FEATURE_KEY` or `SUBCAPABILITY_KEY` is not null (feature/subcap levels of the hierarchy). Splits `FEATURE_FIX_VERSION` on commas and computes min/max target release per `FEATURE_KEY`.
+Built from the epics data. Filters rows where `SNAPSHOT_DATE` is null and either `FEATURE_KEY` or `SUBCAPABILITY_KEY` is not null (feature/subcap levels of the hierarchy). Splits `FEATURE_FIX_VERSION` on commas and computes min/max target release per `FEATURE_KEY`. The output keeps the epics frame's Title Case column names (`Feature Key`, `Feature Fix Version`, ...) and adds `Min Target Release` / `Max Target Release`, matching `EPICS.hyper`.

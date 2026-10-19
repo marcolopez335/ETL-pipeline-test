@@ -416,6 +416,13 @@ def join_agile(df: pl.DataFrame, df_agile: pl.DataFrame, has_snapshot: bool = Tr
 
 
 def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
+    """Release range per feature from the live (null Snapshot Date) epic rows.
+
+    ``df`` is the unioned epics frame after data_functions, so its columns
+    are Title Case ("Feature Key", "Feature Fix Version", ...). The result
+    keeps those names and adds "Min Target Release" / "Max Target Release",
+    so EPICS_ACRP.hyper and EPICS.hyper agree on every field name.
+    """
     # Diagnostic: null counts for the columns the filter cares about (one pass)
     null_snap, null_feat, null_subcap = df.select([
         pl.col("Snapshot Date").is_null().sum(),
@@ -448,17 +455,11 @@ def build_acrp(df: pl.DataFrame) -> pl.DataFrame:
         pl.col("Feature Fix Version").max().alias("Max Target Release"),
     ])
 
-    # Inner join back to the split data
+    # Inner join back to the split data. Column names are left as they are
+    # (Title Case, like EPICS.hyper) -- no rename back to SNAKE_CASE.
     result = split.join(summary, on="Feature Key", how="inner")
 
-    # Rename columns: Title Case -> SNAKE_CASE
-    rename_map = {
-        col: col.upper().replace(" ", "_")
-        for col in result.columns
-    }
-    result = result.rename(rename_map)
-
-    logger.info(f"ACRP result: {result.height} rows, {result['FEATURE_KEY'].n_unique()} features")
+    logger.info(f"ACRP result: {result.height} rows, {result['Feature Key'].n_unique()} features")
     return result
 
 

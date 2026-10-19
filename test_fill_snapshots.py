@@ -529,6 +529,56 @@ def test_agile_rollup_collapses_to_one_row_per_feature() -> None:
           detail=str(hc.select(["FEATURE_ID", "SNAPSHOT_DATE"])))
 
 
+def test_build_acrp_keeps_epics_column_names() -> None:
+    """EPICS_ACRP.hyper carries the same column names as EPICS.hyper (Title
+    Case, from epics data_functions) plus the release range. It used to be
+    renamed back to SNAKE_CASE, so the two datasources disagreed on every
+    field name ("Feature Key" vs FEATURE_KEY)."""
+    from conversion.epics_table import build_acrp, build_sprint_lookups
+    from conversion.epics_table import data_functions as epics_transforms
+    from conversion.shared import union_data
+
+    today = datetime.now().date()
+    prior_snap = today - timedelta(days=14)
+    summary = pl.DataFrame({                      # live rows: null SNAPSHOT_DATE
+        "FEATURE_KEY": ["F1", "F2", None],
+        "SUBCAPABILITY_KEY": ["SC1", "SC1", None],   # third row: neither key -> not ACRP
+        "PROGRAM_INCREMENT": ["PI 26.1"] * 3,
+        "FEATURE_FIX_VERSION": ["R26.2, R26.1", "R26.3", "R26.9"],
+        "SNAPSHOT_DATE": pl.Series([None, None, None], dtype=pl.Date),
+    })
+    history = pl.DataFrame({                      # old snapshot: not part of the ACRP
+        "FEATURE_KEY": ["F1", "F2"],
+        "SUBCAPABILITY_KEY": ["SC1", "SC1"],
+        "PROGRAM_INCREMENT": ["PI 26.1"] * 2,
+        "FEATURE_FIX_VERSION": ["R26.0", "R26.0"],
+        "SNAPSHOT_DATE": [prior_snap, prior_snap],
+    })
+    sprints = pl.DataFrame({
+        "PROGRAM_INCREMENT": ["PI 26.1"], "SPRINT_NAME": ["AMMM 26.1.2"],
+        "BEGIN_DATE": [datetime(2026, 4, 1)], "END_DATE": [datetime(2026, 4, 14)],
+    })
+    hist_lookup, sum_lookup = build_sprint_lookups(
+        sprints.with_columns(pl.lit(prior_snap).alias("SNAPSHOT_DATE")), sprints)
+    epics = epics_transforms(union_data(summary, history), hist_lookup, sum_lookup)
+    acrp = build_acrp(epics)   # run() builds it before the Snapshot Date nulls are filled
+
+    check("acrp: same column names as EPICS plus the release range",
+          acrp.columns == epics.columns + ["Min Target Release", "Max Target Release"],
+          detail=str(acrp.columns))
+    check("acrp: no column renamed to SNAKE_CASE",
+          not any("_" in c or c.isupper() for c in acrp.columns), detail=str(acrp.columns))
+    check("acrp: live feature/subcap rows only, one per fix version (3)",
+          acrp.height == 3 and acrp["Snapshot Date"].null_count() == 3,
+          detail=f"rows={acrp.height}")
+    f1 = acrp.filter(pl.col("Feature Key") == "F1")
+    check("acrp: fix versions split and release range per feature",
+          sorted(f1["Feature Fix Version"].to_list()) == ["R26.1", "R26.2"]
+          and f1["Min Target Release"].unique().to_list() == ["R26.1"]
+          and f1["Max Target Release"].unique().to_list() == ["R26.2"],
+          detail=str(f1.select(["Feature Fix Version", "Min Target Release", "Max Target Release"])))
+
+
 def test_export_csv_round_trips() -> None:
     """--csv: the CSV carries the same columns and rows as the frame, in a
     folder that is created on demand, readable back with the BOM stripped."""
@@ -673,6 +723,7 @@ def main() -> int:
     test_drop_todays_history_prevents_double_count()
     test_sprint_lookup_guards()
     test_agile_rollup_collapses_to_one_row_per_feature()
+    test_build_acrp_keeps_epics_column_names()
     test_export_csv_round_trips()
     test_column_drift_warning()
     test_schemas_match_sql_and_parse_string_dates()

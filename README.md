@@ -214,6 +214,8 @@ A derived view from epics data that maps features and sub-capabilities to their 
 3. Computes min/max target release per `FEATURE_KEY`
 4. Joins the release range back to produce the final dataset
 
+`EPICS_ACRP.hyper` uses the same column names as `EPICS.hyper` (Title Case: `Feature Key`, `Feature Fix Version`, ...) plus `Min Target Release` / `Max Target Release`, so the two Tableau datasources line up field for field.
+
 ### Sprint Range
 
 Parses `SPRINT_NAME` (e.g., `"Team Alpha PI 26.1.2"`) to extract the sprint version and computes `MIN_SPRINT` / `MAX_SPRINT` per `SNAPSHOT_DATE` + `PROGRAM_INCREMENT`. The `IP` (Innovation & Planning) sprint sorts as the highest value in each PI.
