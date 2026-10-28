@@ -6,7 +6,8 @@ import FeatureTable from './components/FeatureTable.jsx'
 import BurnupChart from './components/BurnupChart.jsx'
 import AnalysisPanel from './components/AnalysisPanel.jsx'
 import TabStrip, { TABS } from './components/TabStrip.jsx'
-import { analysisNotes, burnupByPi, features } from './data/mock.js'
+import { analysisNotes, PI_WINDOWS, stories } from './data/mock.js'
+import { burnup, featureRows } from './lib/aggregate.js'
 
 const DEFAULT_FILTERS = {
   pi: '26.3', release: '(All)', group: '(All)', program: '(All)', owner: '(All)',
@@ -52,14 +53,18 @@ export default function App() {
   }
   const onSort = (key) => setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }))
 
-  const rows = useMemo(() => features
-    .filter((f) => f.pi === filters.pi)
-    .filter((f) => filters.owner === '(All)' || f.owner === filters.owner)
-    .filter((f) => filters.release === '(All)' || f.release === filters.release)
-    .filter((f) => (BV_RULE[filters.bv] || BV_RULE.ALL)(f.bv))
-    .sort((a, b) => compare(a, b, sort.key, sort.dir)), [filters, sort])
+  /* The slice every section shares: story rows for the selected PI, cut by
+     the feature-level filters (Owner, Target Release, BV) and by the team
+     that worked the story (Contributor). */
+  const slice = useMemo(() => stories
+    .filter((s) => s.featurePi === filters.pi)
+    .filter((s) => filters.owner === '(All)' || s.featureTeam === filters.owner)
+    .filter((s) => filters.contributor === '(All)' || s.teamName === filters.contributor)
+    .filter((s) => filters.release === '(All)' || s.featureFixVersion === filters.release)
+    .filter((s) => (BV_RULE[filters.bv] || BV_RULE.ALL)(s.bv)), [filters])
 
-  const points = burnupByPi[filters.pi] || []
+  const rows = useMemo(() => featureRows(slice).sort((a, b) => compare(a, b, sort.key, sort.dir)), [slice, sort])
+  const points = useMemo(() => burnup(slice, PI_WINDOWS[filters.pi] || { snapshots: [], start: 0 }), [slice, filters.pi])
 
   return (
     <>
@@ -87,7 +92,7 @@ export default function App() {
         )}
 
         <TabStrip active={tab} onSelect={setTab} />
-        <footer className="footer">Mockup · sample data in the shape of EPICS.hyper and the program burn-up · glass theme</footer>
+        <footer className="footer">Mockup · sample story rows in the shape of STORIES.hyper, aggregated into the feature table and burn-up · glass theme</footer>
       </div>
     </>
   )

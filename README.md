@@ -340,4 +340,4 @@ Next run (DB has Mar 9 now):
 
 ## Dashboard mockup
 
-`dashboards/` holds a React + CSS mockup of the Program Metrics (PI) Tableau sheet in a glass theme, driven by sample data in the shape of `EPICS.hyper`. See `dashboards/README.md` for how to run it.
+`dashboards/` holds a React + CSS mockup of the Program Metrics (PI) Tableau sheet in a glass theme, driven by sample story rows in the shape of `STORIES.hyper` that are aggregated into the feature table and the burn-up. See `dashboards/README.md` for how to run it.
