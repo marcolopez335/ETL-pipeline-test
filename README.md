@@ -337,3 +337,7 @@ Next run (DB has Mar 9 now):
 - **Multi-environment Tableau publishing** — Publish hyper files to TST and PRD with `--publish` (or one of them with `--publish-tst` / `--publish-prd`); the external server publishes only with an explicit `--publish-external`
 - **Incremental updates** — Only recent history is fetched and merged on subsequent runs, with a safety check preventing cache shrinkage beyond a configurable threshold (default: 2%)
 - **Memory-efficient pipeline** — Intermediate DataFrames are freed eagerly, stats are computed once and shared across logger and console display
+
+## Dashboard mockup
+
+`dashboards/` holds a React + CSS mockup of the Program Metrics (PI) Tableau sheet in a glass theme, driven by sample data in the shape of `EPICS.hyper`. See `dashboards/README.md` for how to run it.

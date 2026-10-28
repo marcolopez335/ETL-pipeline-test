@@ -1,0 +1,61 @@
+/* The glass theme: a fixed gradient plane with three soft color blobs behind
+   it, and frosted panels (backdrop blur + translucent fill + hairline border
+   + a 1px top highlight) in front. */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* The gradient lives on <html> so it spans the whole document, not just
+   the first viewport (fixed attachment breaks in full-page captures). */
+html {
+  min-height: 100%;
+  background: linear-gradient(160deg, var(--bg-1) 0%, var(--bg-2) 100%);
+}
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text-1);
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+
+.bg-blobs {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+.bg-blobs span {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.9;
+  animation: drift 28s ease-in-out infinite alternate;
+}
+.bg-blobs .a { width: 46vw; height: 46vw; left: -10vw; top: -14vw; background: var(--blob-a); }
+.bg-blobs .b { width: 38vw; height: 38vw; right: -8vw; top: 18vh; background: var(--blob-b); animation-delay: -9s; }
+.bg-blobs .c { width: 42vw; height: 42vw; left: 28vw; bottom: -20vw; background: var(--blob-c); animation-delay: -18s; }
+
+@keyframes drift {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(4vw, 3vh, 0) scale(1.08); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bg-blobs span { animation: none; }
+}
+
+.glass {
+  position: relative;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
+}
+.glass.strong { background: var(--glass-bg-strong); }
+.glass.pill { border-radius: 999px; }
+
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
