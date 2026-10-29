@@ -50,16 +50,18 @@
 .menu-lines { display: grid; gap: 3px; }
 .menu-lines i { display: block; width: 16px; height: 2px; border-radius: 2px; background: currentColor; }
 
-/* Filter row ----------------------------------------------------------- */
+/* Filter row: all ten on one line, no scrolling; they wrap into rows only
+   on narrow screens. ---------------------------------------------------- */
 .filters {
-  display: flex;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 8px;
   padding: 10px 12px;
-  overflow-x: auto;
-  scrollbar-width: thin;
 }
-.filter { display: grid; gap: 4px; min-width: 128px; flex: 1 0 auto; }
-.filter label { font-size: 11px; font-weight: 600; color: var(--text-2); letter-spacing: 0.02em; }
+@media (max-width: 1100px) { .filters { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.filter { display: grid; gap: 4px; min-width: 0; }
+.filter label { font-size: 11px; font-weight: 600; color: var(--text-2); letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .select {
   position: relative;
 }
@@ -72,14 +74,18 @@
   background: var(--control-bg);
   border: 1px solid var(--control-border);
   border-radius: 10px;
-  padding: 7px 28px 7px 10px;
+  padding: 7px 24px 7px 9px;
+  font-size: 12.5px;
   cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .select select option { color: #0b0b0b; background: #fff; }
 .select::after {
   content: "";
   position: absolute;
-  right: 11px;
+  right: 9px;
   top: 50%;
   width: 7px;
   height: 7px;
@@ -124,9 +130,37 @@ table.features th {
   position: sticky; top: 0; z-index: 1;
   font-size: 12px; font-weight: 600; color: var(--text-2);
   background: var(--surface-ring);
-  cursor: pointer; user-select: none;
+  user-select: none;
 }
 table.features th .sort { color: var(--text-3); margin-left: 4px; font-size: 10px; }
+.th-wrap { display: flex; align-items: center; gap: 2px; }
+table.features th.num .th-wrap { justify-content: flex-end; }
+.th-sort { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; white-space: nowrap; }
+.th-sort:hover { color: var(--text-1); }
+.th-filter {
+  width: 20px; height: 20px; border-radius: 6px; border: 0; padding: 0;
+  background: transparent; color: var(--text-3); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.th-filter:hover, .th-filter[aria-expanded="true"] { color: var(--text-1); background: var(--row-hover); }
+.th-filter[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+
+/* Header filter popover (portaled to <body>) */
+.popover { position: fixed; z-index: 50; padding: 10px; border-radius: 12px; font-size: 12px; color: var(--text-2); display: grid; gap: 8px; }
+.popover .head { font-weight: 700; color: var(--text-1); font-size: 13px; }
+.popover input[type="search"], .popover input[type="date"], .popover input[type="number"] {
+  width: 100%; font: inherit; color: var(--text-1); background: var(--control-bg);
+  border: 1px solid var(--control-border); border-radius: 8px; padding: 6px 8px;
+}
+.popover .quick { display: flex; gap: 10px; }
+.popover .quick button { font: inherit; font-size: 11px; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; }
+.popover .list { max-height: 220px; overflow: auto; display: grid; gap: 2px; }
+.popover .list label { display: flex; align-items: center; gap: 8px; padding: 3px 2px; border-radius: 6px; color: var(--text-1); cursor: pointer; }
+.popover .list label:hover { background: var(--row-hover); }
+.popover .list input { accent-color: var(--accent); margin: 0; }
+.popover .range { display: grid; gap: 6px; }
+.popover .range label { display: grid; grid-template-columns: 40px 1fr; align-items: center; gap: 6px; }
+.popover .foot { display: flex; justify-content: space-between; }
 table.features th[aria-sort="ascending"], table.features th[aria-sort="descending"] { color: var(--text-1); }
 table.features tbody tr:hover { background: var(--row-hover); }
 table.features td.num { text-align: right; font-variant-numeric: tabular-nums; }

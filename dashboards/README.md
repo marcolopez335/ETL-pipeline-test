@@ -25,13 +25,16 @@ Same sections as production, top to bottom:
 | Header | `Header.jsx` | Data extract / load stamps, title with the selected PI, dark/light toggle |
 | Filter row | `FilterBar.jsx` | Select PI, Target Release, Group, Program, Owner, Contributor, Sort By, Predictability, Ideal Burnup, BV |
 | KPI tiles | `KpiRow.jsx` | Features in PI, features done, story points done / scope, performance to plan |
-| Feature Progress (PI) | `FeatureTable.jsx` | Feature, Owner, BV, Start, End, Size, Status pill, PI % and Total % meters; sortable headers |
+| Feature Progress (PI) | `FeatureTable.jsx` | Feature, Owner, BV, Start, End, Size, Status pill, PI % and Total % meters; click a header name to sort, its funnel to filter (text search on Feature, pick-list on Owner, BV and Status, from/to range on the dates, Size and the percentages) |
 | Program Burnup (PI) | `BurnupChart.jsx` | Ideal / Done / Scope lines, crosshair tooltip, keyboard navigation, legend toggles, table view |
 | Analysis / Corrective Action | `AnalysisPanel.jsx` | Notes list plus an add-note form (local state only) |
 | Sheet tabs | `TabStrip.jsx` | The production sheet names; only the first sheet is built out |
 
-Wired filters: **Select PI**, **Target Release**, **Owner**, **BV**, **Sort By**
-and **Ideal Burnup** change the table, the tiles and the chart together.
+All ten filters sit on one row with no scrolling (they wrap into rows only on
+narrow screens). Wired filters: **Select PI**, **Target Release**, **Owner**,
+**Contributor**, **BV**, **Sort By** and **Ideal Burnup** change the table, the
+tiles and the chart together, and so do the column header filters: the tiles
+and the burn-up are rebuilt from the stories of the features left in the table.
 Group, Program, Contributor and Predictability are present for layout fidelity
 and do nothing yet.
 

@@ -8,6 +8,8 @@ import AnalysisPanel from './components/AnalysisPanel.jsx'
 import TabStrip, { TABS } from './components/TabStrip.jsx'
 import { analysisNotes, PI_WINDOWS, stories } from './data/mock.js'
 import { burnup, featureRows } from './lib/aggregate.js'
+import { COLUMNS } from './lib/columns.js'
+import { anyActive, applyColumnFilters } from './lib/filters.js'
 
 const DEFAULT_FILTERS = {
   pi: '26.3', release: '(All)', group: '(All)', program: '(All)', owner: '(All)',
@@ -41,6 +43,7 @@ export default function App() {
   const [filters, setFilters] = useState(DEFAULT_FILTERS)
   const [sort, setSort] = useState({ key: 'end', dir: 'asc' })
   const [tab, setTab] = useState(TABS[0])
+  const [colFilters, setColFilters] = useState({})
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -50,7 +53,13 @@ export default function App() {
   const setFilter = (id, value) => {
     setFilters((f) => ({ ...f, [id]: value }))
     if (id === 'sortBy') setSort({ key: SORT_KEY[value] || 'end', dir: 'asc' })
+    if (id === 'pi') setColFilters({})     // another PI has other values to pick from
   }
+  const setColFilter = (key, value) => setColFilters((f) => {
+    const next = { ...f }
+    if (value == null) delete next[key]; else next[key] = value
+    return next
+  })
   const onSort = (key) => setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }))
 
   /* The slice every section shares: story rows for the selected PI, cut by
@@ -63,8 +72,17 @@ export default function App() {
     .filter((s) => filters.release === '(All)' || s.featureFixVersion === filters.release)
     .filter((s) => (BV_RULE[filters.bv] || BV_RULE.ALL)(s.bv)), [filters])
 
-  const rows = useMemo(() => featureRows(slice).sort((a, b) => compare(a, b, sort.key, sort.dir)), [slice, sort])
-  const points = useMemo(() => burnup(slice, PI_WINDOWS[filters.pi] || { snapshots: [], start: 0 }), [slice, filters.pi])
+  /* Column header filters narrow the feature rows, and the tiles and the
+     chart follow: they are built from the stories of the features left. */
+  const allRows = useMemo(() => featureRows(slice), [slice])
+  const rows = useMemo(() => applyColumnFilters(allRows, colFilters, COLUMNS)
+    .sort((a, b) => compare(a, b, sort.key, sort.dir)), [allRows, colFilters, sort])
+  const chartSlice = useMemo(() => {
+    if (!anyActive(colFilters)) return slice
+    const keep = new Set(rows.map((r) => r.key))
+    return slice.filter((s) => keep.has(s.featureId))
+  }, [slice, rows, colFilters])
+  const points = useMemo(() => burnup(chartSlice, PI_WINDOWS[filters.pi] || { snapshots: [], start: 0 }), [chartSlice, filters.pi])
 
   return (
     <>
@@ -77,7 +95,9 @@ export default function App() {
           <>
             <KpiRow rows={rows} points={points} />
             <div className="main">
-              <FeatureTable rows={rows} sort={sort} onSort={onSort} pi={filters.pi} />
+              <FeatureTable rows={rows} allRows={allRows} sort={sort} onSort={onSort} pi={filters.pi}
+                            colFilters={colFilters} onColFilter={setColFilter}
+                            onClearColFilters={() => setColFilters({})} />
               <div className="stack">
                 <BurnupChart points={points} showIdeal={filters.idealBurnup !== 'Hide'} pi={filters.pi} />
                 <AnalysisPanel initialNotes={analysisNotes} />

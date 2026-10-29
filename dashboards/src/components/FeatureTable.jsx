@@ -1,16 +1,8 @@
+import { useState } from 'react'
+import HeaderFilter from './HeaderFilter.jsx'
+import { COLUMNS } from '../lib/columns.js'
+import { anyActive, distinctValues, isActive } from '../lib/filters.js'
 import { fmtDate, fmtPct } from '../lib/format.js'
-
-const COLUMNS = [
-  { key: 'key', label: 'Feature' },
-  { key: 'owner', label: 'Owner' },
-  { key: 'bv', label: 'BV', num: true },
-  { key: 'start', label: 'Start' },
-  { key: 'end', label: 'End' },
-  { key: 'size', label: 'Size', num: true },
-  { key: 'status', label: 'Status' },
-  { key: 'piPct', label: 'PI' },
-  { key: 'totalPct', label: 'Total' },
-]
 
 /* Status wears a fixed status color plus an icon and the label, never color alone. */
 const STATUS = {
@@ -35,12 +27,29 @@ function Meter({ pct, kind }) {
   )
 }
 
-export default function FeatureTable({ rows, sort, onSort, pi }) {
+const Funnel = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+    <path d="M1 1.5h10L7.2 6.4V10l-2.4 1V6.4Z" fill="currentColor" />
+  </svg>
+)
+
+export default function FeatureTable({ rows, allRows, sort, onSort, pi, colFilters, onColFilter, onClearColFilters }) {
+  const [open, setOpen] = useState(null)      // { key, anchor } of the open header filter
+  const filtered = anyActive(colFilters)
+  const openCol = open && COLUMNS.find((c) => c.key === open.key)
+
   return (
     <section className="glass card" aria-labelledby="features-h">
       <div className="card-head">
         <h2 id="features-h">Feature Progress (PI)</h2>
-        <span className="meta">{rows.length} features · PI {pi} · click a header to sort</span>
+        <div className="card-tools">
+          <span className="meta">
+            {filtered ? `${rows.length} of ${allRows.length}` : rows.length} features · PI {pi} · sort by the name, filter with the funnel
+          </span>
+          {filtered && (
+            <button type="button" className="btn small" onClick={onClearColFilters}>Clear column filters</button>
+          )}
+        </div>
       </div>
       <div className="table-wrap">
         <table className="features">
@@ -48,11 +57,21 @@ export default function FeatureTable({ rows, sort, onSort, pi }) {
             <tr>
               {COLUMNS.map((c) => {
                 const active = sort.key === c.key
+                const cls = c.num ? 'num' : c.key === 'key' ? 'feature' : ''
                 return (
-                  <th key={c.key} className={c.num ? 'num' : c.key === 'key' ? 'feature' : ''} scope="col"
-                      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
-                      onClick={() => onSort(c.key)}>
-                    {c.label}<span className="sort" aria-hidden="true">{active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}</span>
+                  <th key={c.key} className={cls} scope="col"
+                      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                    <div className="th-wrap">
+                      <button type="button" className="th-sort" onClick={() => onSort(c.key)}
+                              title={`Sort by ${c.label}`}>
+                        {c.label}<span className="sort" aria-hidden="true">{active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}</span>
+                      </button>
+                      <button type="button" className="th-filter" aria-label={`Filter ${c.label}`}
+                              aria-pressed={isActive(colFilters[c.key])} aria-expanded={open?.key === c.key}
+                              onClick={(e) => setOpen(open?.key === c.key ? null : { key: c.key, anchor: e.currentTarget })}>
+                        <Funnel />
+                      </button>
+                    </div>
                   </th>
                 )
               })}
@@ -80,6 +99,11 @@ export default function FeatureTable({ rows, sort, onSort, pi }) {
           </tbody>
         </table>
       </div>
+      {openCol && (
+        <HeaderFilter column={openCol} anchor={open.anchor} value={colFilters[openCol.key]}
+                      options={openCol.filter === 'values' ? distinctValues(allRows, openCol.key) : []}
+                      onChange={(v) => onColFilter(openCol.key, v)} onClose={() => setOpen(null)} />
+      )}
     </section>
   )
 }
