@@ -557,6 +557,63 @@ def test_export_csv_round_trips() -> None:
         check("csv: nulls come back empty", back["Bv"][1] is None and back["Snapshot Date"][1] is None)
 
 
+def test_dashboard_export() -> None:
+    """Stories frame -> dashboards/ JSON: one record per story (its latest
+    row), firstSeen / doneOn from the snapshots, and a window per PI."""
+    import json
+    import tempfile
+    from pathlib import Path
+    from conversion.dashboard_export import build_dashboard_dataset, export_dashboard_json
+
+    def day(y, m, d):
+        return datetime(y, m, d).date()
+
+    df = pl.DataFrame({
+        "Story Number": ["S-1", "S-1", "S-1", "S-2", "S-2"],
+        "Story Name": ["one"] * 3 + ["two"] * 2,
+        "Team Name": ["3H3T"] * 5,
+        "Sprint Name": ["AMMM 26.3.1", "AMMM 26.3.1", "AMMM 26.3.2", "AMMM 26.3.2", "AMMM 26.3.2"],
+        "Pi From Sprint": ["26.3"] * 5,
+        "Program Increment": ["PI 26.3"] * 5,
+        "Fix Version": ["CR3.2"] * 5,
+        "Status": ["To Do", "Done", "Done", "In Progress", "In Progress"],
+        "Estimate": [5.0, 5.0, 5.0, 3.0, 3.0],
+        "Snapshot Date": [day(2026, 9, 7), day(2026, 9, 14), day(2026, 9, 21), day(2026, 9, 14), day(2026, 9, 21)],
+        "Begin Date": [datetime(2026, 9, 1)] * 5,
+        "End Date": [datetime(2026, 9, 28)] * 5,
+        "Feature Id": ["F-1"] * 5, "Feature": ["Feature one"] * 5,
+        "Feature Team": ["3H3T"] * 5, "Feature Pi": ["PI 26.3"] * 5,
+        "Feature Fix Version": ["CR3.2"] * 5, "Feature Status": ["In Progress"] * 5,
+        "Bv": [7] * 5,
+        "Target Start": [datetime(2026, 9, 1)] * 5, "Target End": [datetime(2026, 9, 30)] * 5,
+        "Updated": [datetime(2026, 9, 21, 8, 30)] * 5,
+    })
+    run_at = datetime(2026, 9, 22, 10, 0)
+    data = build_dashboard_dataset(df, now=run_at)
+    by = {s["storyNumber"]: s for s in data["stories"]}
+    check("dashboard: one record per story, from its latest row",
+          len(by) == 2 and by["S-1"]["status"] == "Done" and by["S-1"]["sprintName"] == "AMMM 26.3.2",
+          detail=str(by.get("S-1")))
+    check("dashboard: firstSeen / doneOn come from the snapshots",
+          by["S-1"]["firstSeen"] == "2026-09-07" and by["S-1"]["doneOn"] == "2026-09-14"
+          and by["S-2"]["firstSeen"] == "2026-09-14" and by["S-2"]["doneOn"] is None)
+    check("dashboard: PI window from the snapshots and the sprint dates",
+          data["pis"] == {"26.3": {"snapshots": ["2026-09-07", "2026-09-14", "2026-09-21"],
+                                   "start": "2026-09-01", "end": "2026-09-28"}},
+          detail=str(data["pis"]))
+    check("dashboard: featurePi is the PI number, dates ISO, points numeric",
+          by["S-2"]["featurePi"] == "26.3" and by["S-2"]["targetEnd"] == "2026-09-30"
+          and by["S-2"]["estimate"] == 3.0 and data["extract"].startswith("9/21/2026 08:30:00 AM"),
+          detail=f"extract={data['extract']}")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = export_dashboard_json(df, Path(tmp) / "data" / "stories.json", now=run_at)
+        back = json.loads(path.read_text(encoding="utf-8"))
+        check("dashboard: file written and loads back",
+              path.is_file() and len(back["stories"]) == 2 and back["load"].startswith("9/22/2026"))
+    check("dashboard: empty frame gives an empty dataset",
+          build_dashboard_dataset(df.head(0), now=run_at)["stories"] == [])
+
+
 def test_schemas_match_sql_and_parse_string_dates() -> None:
     """Every schema key is a column its queries return (a renamed SQL column
     must not silently skip its cast), and text dates are parsed, not nulled."""
@@ -674,6 +731,7 @@ def main() -> int:
     test_sprint_lookup_guards()
     test_agile_rollup_collapses_to_one_row_per_feature()
     test_export_csv_round_trips()
+    test_dashboard_export()
     test_column_drift_warning()
     test_schemas_match_sql_and_parse_string_dates()
     test_supertype_rules()

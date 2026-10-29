@@ -18,7 +18,10 @@
 }
 .brand { display: grid; gap: 2px; min-width: 0; }
 .brand .stamp { font-size: 11px; color: var(--text-3); letter-spacing: 0.02em; white-space: nowrap; }
-.brand .program { font-size: 12px; color: var(--text-2); font-weight: 600; }
+.brand .program { font-size: 12px; color: var(--text-2); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.chip { font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--control-border); background: var(--control-bg); color: var(--text-2); }
+.chip.live { border-color: rgba(12, 163, 12, 0.5); background: rgba(12, 163, 12, 0.16); color: var(--text-1); }
+.chip.loading { opacity: 0.7; }
 .title { grid-column: 1 / -1; text-align: center; margin: 0; font-size: 26px; font-weight: 700; letter-spacing: 0.01em; }
 .title .sep { color: var(--text-3); margin: 0 10px; font-weight: 300; }
 .title .pi { color: var(--text-2); font-weight: 500; white-space: nowrap; }

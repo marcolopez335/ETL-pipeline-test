@@ -13,9 +13,13 @@
      featureTeam -> Feature Team      featurePi -> Feature Pi
      featureFixVersion -> Feature Fix Version   featureStatus -> Feature Status
      bv -> Bv                         targetStart / targetEnd -> Target Start / Target End
-   addedWeek / doneWeek stand in for the story's history snapshots: the index
-   of the first weekly Snapshot Date the story appears in, and the first one
-   where its Status is Done or Accepted. */
+   firstSeen / doneOn are the two snapshot facts the burn-up needs: the first
+   weekly Snapshot Date the story appears in, and the first one where its
+   Status is Done or Accepted (null while open).
+
+   `sampleDataset` has exactly the shape the pipeline writes to
+   public/data/stories.json (conversion/dashboard_export.py), so the app
+   treats both the same way. */
 
 export const STAMPS = {
   extract: '10/26/2026 12:43:06 AM CT',
@@ -157,15 +161,26 @@ const buildStories = () => {
         bv: f.bv,
         targetStart: f.start,
         targetEnd: f.end,
-        addedWeek,
-        doneWeek,
+        firstSeen: win.snapshots[addedWeek],
+        doneOn: doneWeek == null ? null : win.snapshots[doneWeek],
       })
     }
   })
   return out
 }
 
-export const stories = buildStories()
+export const sampleDataset = {
+  source: 'sample',
+  defaultPi: '26.3',
+  extract: STAMPS.extract,
+  load: STAMPS.load,
+  pis: Object.fromEntries(Object.entries(PI_WINDOWS).map(([pi, w]) => [pi, {
+    snapshots: w.snapshots,
+    start: w.snapshots[w.start],
+    end: w.snapshots[w.snapshots.length - 1],
+  }])),
+  stories: buildStories(),
+}
 
 export const analysisNotes = [
   { date: '2026-10-21', who: 'RTE', text: 'Scope grew through the PI 26.3 midpoint when CR3.2 flight test and regression support were pulled in; done points track the ideal from September onward.' },

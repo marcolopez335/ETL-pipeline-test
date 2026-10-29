@@ -1,13 +1,16 @@
-import { STAMPS } from '../data/mock.js'
+const STATUS_LABEL = { live: 'Live data', sample: 'Sample data', loading: 'Loading data' }
 
-export default function Header({ pi, theme, onToggleTheme }) {
+export default function Header({ pi, stamps, status, theme, onToggleTheme }) {
   const dark = theme !== 'light'
   return (
     <header className="glass header">
       <div className="brand">
-        <span className="stamp">DATA EXTRACT: {STAMPS.extract}</span>
-        <span className="stamp">DATA LOAD: {STAMPS.load}</span>
-        <span className="program">LMPI | AMMM Program Information</span>
+        <span className="stamp">DATA EXTRACT: {stamps.extract || 'n/a'}</span>
+        <span className="stamp">DATA LOAD: {stamps.load || 'n/a'}</span>
+        <span className="program">
+          LMPI | AMMM Program Information
+          <span className={`chip ${status}`} title="Where the rows on this page come from">{STATUS_LABEL[status] || status}</span>
+        </span>
       </div>
       <h1 className="title">
         Program Metrics<span className="sep">|</span><span className="pi">PI {pi}</span>

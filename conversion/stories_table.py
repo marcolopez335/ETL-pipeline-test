@@ -4,8 +4,9 @@ import polars as pl
 from schemas.datatypes import EXPECTED_DTYPES_STORIES
 # get_logger comes via shared so this module stays importable (and testable)
 # without the proprietary `csm_commonlib` package
+from conversion.dashboard_export import export_dashboard_json
 from conversion.shared import (
-    OUTPUT_DIR, drop_todays_history, get_cache_path, get_logger, run_query, clean_dtypes, update_history,
+    OUTPUT_DIR, ROOT_DIR, drop_todays_history, get_cache_path, get_logger, run_query, clean_dtypes, update_history,
     union_data, export_csv, export_hyper, get_csv_path, log_dataframe_summary, publish_hyper,
     fill_missing_snapshots, history_fetch_plan, parallel_fetch,
 )
@@ -135,10 +136,15 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
 
     log_dataframe_summary(df, "Stories Final")
 
-    with step_spinner(5, total, "Exporting hyper" + (" + csv" if csv else "")):
+    dashboard_json = cfg.get("dashboard_json")
+    extras = (" + csv" if csv else "") + (" + dashboard json" if dashboard_json else "")
+    with step_spinner(5, total, "Exporting hyper" + extras):
         export_hyper(df, hyper_path, "Stories", config)
         if csv:
             export_csv(df, get_csv_path(f"{hyper_path.stem}.csv"))
+        if dashboard_json:
+            # The React mockup in dashboards/ reads this file (see its README)
+            export_dashboard_json(df, ROOT_DIR / dashboard_json)
 
     if publish:
         with step_spinner(6, total, "Publishing to Tableau"):

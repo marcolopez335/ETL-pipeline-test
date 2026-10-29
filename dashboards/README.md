@@ -82,3 +82,26 @@ drive the mockup with real data, export the pipeline with
 `python main.py --stories --csv`, convert `output/csv/STORIES.csv` to JSON
 with the fields above (one `addedWeek` / `doneWeek` per story from its
 snapshot history), and import it in place of `stories`.
+
+## Mounting real data
+
+The stories pipeline can hand its final frame straight to the dashboard:
+
+1. `config.yaml` points `stories.dashboard_json` at
+   `dashboards/public/data/stories.json` (the default). Leave it empty to skip.
+2. Run the pipeline: `python main.py --stories`. The export step writes the
+   JSON next to the hyper file (`conversion/dashboard_export.py`).
+3. Start or build the dashboard. The page fetches `./data/stories.json` on
+   load: with the file present the header chip reads **Live data** and the
+   PI, release, owner and contributor choices come from the rows; without it
+   the page shows the sample set and the chip reads **Sample data**.
+
+`npm run build` copies `public/` into `dist/`, so run the pipeline before
+building, or point `dashboard_json` at the `data/stories.json` of a hosted
+`dist/` to refresh the numbers without rebuilding. The file is gitignored.
+
+The export holds one record per story (its latest row) with the fields in
+the table above, `featurePi` as the PI number, `firstSeen` / `doneOn` from
+the snapshot history, and a `pis` map of each PI's snapshot dates and
+start/end dates for the ideal line. Expect roughly a hundred bytes per
+story on the wire once the server gzips it.

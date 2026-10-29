@@ -6,8 +6,9 @@ import FeatureTable from './components/FeatureTable.jsx'
 import BurnupChart from './components/BurnupChart.jsx'
 import AnalysisPanel from './components/AnalysisPanel.jsx'
 import TabStrip, { TABS } from './components/TabStrip.jsx'
-import { analysisNotes, PI_WINDOWS, stories } from './data/mock.js'
+import { analysisNotes } from './data/mock.js'
 import { burnup, featureRows } from './lib/aggregate.js'
+import { useDataset } from './lib/useDataset.js'
 import { COLUMNS } from './lib/columns.js'
 import { anyActive, applyColumnFilters } from './lib/filters.js'
 
@@ -27,6 +28,17 @@ const readTheme = () => {
   try { return localStorage.getItem('pm-theme') || 'dark' } catch { return 'dark' }
 }
 
+const distinct = (rows, key) => [...new Set(rows.map((r) => r[key]).filter(Boolean))].sort()
+
+/* The PI to open on: the dataset's own choice, else the latest PI that has
+   started, else the last one. */
+const defaultPi = (dataset) => {
+  if (dataset.defaultPi && dataset.pis[dataset.defaultPi]) return dataset.defaultPi
+  const pis = Object.keys(dataset.pis).sort()
+  const today = new Date().toISOString().slice(0, 10)
+  return pis.filter((p) => (dataset.pis[p].start || '') <= today).at(-1) || pis.at(-1) || ''
+}
+
 /* Nulls and blanks sort last in either direction. */
 const compare = (a, b, key, dir) => {
   const av = a[key], bv = b[key]
@@ -44,6 +56,21 @@ export default function App() {
   const [sort, setSort] = useState({ key: 'end', dir: 'asc' })
   const [tab, setTab] = useState(TABS[0])
   const [colFilters, setColFilters] = useState({})
+  const { dataset, status } = useDataset()
+  const stories = dataset.stories
+
+  // A new dataset (the real rows arriving) resets the data-dependent filters
+  useEffect(() => {
+    setFilters((f) => ({ ...f, pi: defaultPi(dataset), owner: '(All)', contributor: '(All)', release: '(All)' }))
+    setColFilters({})
+  }, [dataset])
+
+  const options = useMemo(() => ({
+    pis: Object.keys(dataset.pis).sort(),
+    releases: distinct(stories, 'featureFixVersion'),
+    owners: distinct(stories, 'featureTeam'),
+    contributors: distinct(stories, 'teamName'),
+  }), [dataset, stories])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -70,7 +97,7 @@ export default function App() {
     .filter((s) => filters.owner === '(All)' || s.featureTeam === filters.owner)
     .filter((s) => filters.contributor === '(All)' || s.teamName === filters.contributor)
     .filter((s) => filters.release === '(All)' || s.featureFixVersion === filters.release)
-    .filter((s) => (BV_RULE[filters.bv] || BV_RULE.ALL)(s.bv)), [filters])
+    .filter((s) => (BV_RULE[filters.bv] || BV_RULE.ALL)(s.bv)), [stories, filters])
 
   /* Column header filters narrow the feature rows, and the tiles and the
      chart follow: they are built from the stories of the features left. */
@@ -82,14 +109,15 @@ export default function App() {
     const keep = new Set(rows.map((r) => r.key))
     return slice.filter((s) => keep.has(s.featureId))
   }, [slice, rows, colFilters])
-  const points = useMemo(() => burnup(chartSlice, PI_WINDOWS[filters.pi] || { snapshots: [], start: 0 }), [chartSlice, filters.pi])
+  const points = useMemo(() => burnup(chartSlice, dataset.pis[filters.pi]), [chartSlice, dataset, filters.pi])
 
   return (
     <>
       <div className="bg-blobs" aria-hidden="true"><span className="a" /><span className="b" /><span className="c" /></div>
       <div className="app">
-        <Header pi={filters.pi} theme={theme} onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')} />
-        <FilterBar filters={filters} onChange={setFilter} />
+        <Header pi={filters.pi} stamps={dataset} status={status} theme={theme}
+                onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')} />
+        <FilterBar filters={filters} onChange={setFilter} options={options} />
 
         {tab === TABS[0] ? (
           <>
@@ -112,7 +140,11 @@ export default function App() {
         )}
 
         <TabStrip active={tab} onSelect={setTab} />
-        <footer className="footer">Mockup · sample story rows in the shape of STORIES.hyper, aggregated into the feature table and burn-up · glass theme</footer>
+        <footer className="footer">
+          {status === 'live'
+            ? `Live data from the stories pipeline (generated ${dataset.generated || 'n/a'})`
+            : 'Mockup · sample story rows in the shape of STORIES.hyper'} · aggregated into the feature table and burn-up · glass theme
+        </footer>
       </div>
     </>
   )
