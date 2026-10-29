@@ -84,7 +84,9 @@ export default function FeatureTable({ rows, allRows, sort, onSort, pi, colFilte
             {rows.map((r) => (
               <tr key={r.key}>
                 <td className="feature" title={`${r.key} - ${r.summary}`}>
-                  <span className="key">{r.key}</span><span className="summary">- {r.summary}</span>
+                  <div className="feature-text">
+                    <span className="key">{r.key}</span><span className="summary">- {r.summary}</span>
+                  </div>
                 </td>
                 <td className="owner">{r.owner || ''}</td>
                 <td className="num">{r.bv ?? ''}</td>
