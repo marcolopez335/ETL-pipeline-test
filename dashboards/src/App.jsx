@@ -115,7 +115,7 @@ export default function App() {
     <>
       <div className="bg-blobs" aria-hidden="true"><span className="a" /><span className="b" /><span className="c" /></div>
       <div className="app">
-        <Header pi={filters.pi} stamps={dataset} status={status} theme={theme}
+        <Header pi={filters.pi} stamps={dataset} status={status} dataset={dataset} theme={theme}
                 onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')} />
         <FilterBar filters={filters} onChange={setFilter} options={options} />
 

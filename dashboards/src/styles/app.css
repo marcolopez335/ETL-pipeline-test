@@ -164,6 +164,8 @@ table.features th.num .th-wrap { justify-content: flex-end; }
 .popover .range { display: grid; gap: 6px; }
 .popover .range label { display: grid; grid-template-columns: 40px 1fr; align-items: center; gap: 6px; }
 .popover .foot { display: flex; justify-content: space-between; }
+.popover.diagnostics { left: auto; font: 12px/1.5 Consolas, "Cascadia Mono", monospace; }
+.popover.diagnostics ol { margin: 0; padding-left: 22px; display: grid; gap: 4px; color: var(--text-1); word-break: break-word; }
 table.features th[aria-sort="ascending"], table.features th[aria-sort="descending"] { color: var(--text-1); }
 table.features tbody tr:hover { background: var(--row-hover); }
 table.features td.num { text-align: right; font-variant-numeric: tabular-nums; }

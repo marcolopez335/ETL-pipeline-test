@@ -1,7 +1,11 @@
+import { useState } from 'react'
+import Diagnostics from './Diagnostics.jsx'
+
 const STATUS_LABEL = { live: 'Live data', sample: 'Sample data', loading: 'Loading data' }
 
-export default function Header({ pi, stamps, status, theme, onToggleTheme }) {
+export default function Header({ pi, stamps, status, dataset, theme, onToggleTheme }) {
   const dark = theme !== 'light'
+  const [diag, setDiag] = useState(null)   // the menu button while the diagnostics panel is open
   return (
     <header className="glass header">
       <div className="brand">
@@ -20,10 +24,12 @@ export default function Header({ pi, stamps, status, theme, onToggleTheme }) {
                 title="Switch between the dark and light glass themes">
           <span aria-hidden="true">{dark ? '☾' : '☀'}</span> {dark ? 'Dark' : 'Light'}
         </button>
-        <button type="button" className="btn icon" aria-label="Menu">
+        <button type="button" className="btn icon" aria-label="Menu and diagnostics" aria-expanded={diag != null}
+                title="Diagnostics" onClick={(e) => setDiag(diag ? null : e.currentTarget)}>
           <span className="menu-lines" aria-hidden="true"><i /><i /><i /></span>
         </button>
       </div>
+      {diag && <Diagnostics anchor={diag} status={status} dataset={dataset} onClose={() => setDiag(null)} />}
     </header>
   )
 }
