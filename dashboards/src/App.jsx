@@ -10,25 +10,25 @@ import { analysisNotes } from './data/mock.js'
 import { burnup, featureRows } from './lib/aggregate.js'
 import { useDataset } from './lib/useDataset.js'
 import { COLUMNS } from './lib/columns.js'
-import { anyActive, applyColumnFilters } from './lib/filters.js'
+import { anyActive, applyColumnFilters, asValue } from './lib/filters.js'
+import { groupOf } from './data/groups.js'
 
+/* Multi-select filters hold null for "all" or an array of selected values. */
 const DEFAULT_FILTERS = {
-  pi: '26.3', release: '(All)', group: '(All)', program: '(All)', owner: '(All)',
-  contributor: '(All)', sortBy: 'END Date', predictability: 'Hide', idealBurnup: 'Planned', bv: 'ALL',
+  pi: '26.3', release: null, group: null, program: null, owner: null, contributor: null, bv: null,
+  sortBy: 'END Date', predictability: 'Hide', idealBurnup: 'Planned',
 }
+const MULTI = ['release', 'group', 'program', 'owner', 'contributor', 'bv']
 const SORT_KEY = { 'END Date': 'end', 'START Date': 'start', BV: 'bv', Feature: 'key', Status: 'status', Owner: 'owner' }
-const BV_RULE = {
-  ALL: () => true,
-  '8 and up': (bv) => bv != null && bv >= 8,
-  '5 and up': (bv) => bv != null && bv >= 5,
-  '4 and under': (bv) => bv != null && bv <= 4,
-}
+const inSelection = (selected, v) => selected == null || selected.includes(asValue(v))
 
 const readTheme = () => {
   try { return localStorage.getItem('pm-theme') || 'dark' } catch { return 'dark' }
 }
 
-const distinct = (rows, key) => [...new Set(rows.map((r) => r[key]).filter(Boolean))].sort()
+/* Distinct values of a column as filter choices, blank ('') last. */
+const choices = (rows, key) => [...new Set(rows.map((r) => asValue(r[key])))]
+  .sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b, undefined, { numeric: true })))
 
 /* The PI to open on: the dataset's own choice, else the latest PI that has
    started, else the last one. */
@@ -61,15 +61,17 @@ export default function App() {
 
   // A new dataset (the real rows arriving) resets the data-dependent filters
   useEffect(() => {
-    setFilters((f) => ({ ...f, pi: defaultPi(dataset), owner: '(All)', contributor: '(All)', release: '(All)' }))
+    setFilters((f) => ({ ...f, pi: defaultPi(dataset), ...Object.fromEntries(MULTI.map((k) => [k, null])) }))
     setColFilters({})
   }, [dataset])
 
   const options = useMemo(() => ({
     pis: Object.keys(dataset.pis).sort(),
-    releases: distinct(stories, 'featureFixVersion'),
-    owners: distinct(stories, 'featureTeam'),
-    contributors: distinct(stories, 'teamName'),
+    releases: choices(stories, 'featureFixVersion'),
+    programs: choices(stories, 'customerEpic'),
+    owners: choices(stories, 'featureTeam'),
+    contributors: choices(stories, 'teamName'),
+    bvs: choices(stories, 'bv'),
   }), [dataset, stories])
 
   useEffect(() => {
@@ -90,14 +92,16 @@ export default function App() {
   const onSort = (key) => setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }))
 
   /* The slice every section shares: story rows for the selected PI, cut by
-     the feature-level filters (Owner, Target Release, BV) and by the team
-     that worked the story (Contributor). */
+     the feature-level filters (Target Release, Group, Program, Owner, BV)
+     and by the team that worked the story (Contributor). */
   const slice = useMemo(() => stories
     .filter((s) => s.featurePi === filters.pi)
-    .filter((s) => filters.owner === '(All)' || s.featureTeam === filters.owner)
-    .filter((s) => filters.contributor === '(All)' || s.teamName === filters.contributor)
-    .filter((s) => filters.release === '(All)' || s.featureFixVersion === filters.release)
-    .filter((s) => (BV_RULE[filters.bv] || BV_RULE.ALL)(s.bv)), [stories, filters])
+    .filter((s) => inSelection(filters.release, s.featureFixVersion))
+    .filter((s) => inSelection(filters.group, groupOf(s.featureTeam)))
+    .filter((s) => inSelection(filters.program, s.customerEpic))
+    .filter((s) => inSelection(filters.owner, s.featureTeam))
+    .filter((s) => inSelection(filters.contributor, s.teamName))
+    .filter((s) => inSelection(filters.bv, s.bv)), [stories, filters])
 
   /* Column header filters narrow the feature rows, and the tiles and the
      chart follow: they are built from the stories of the features left. */

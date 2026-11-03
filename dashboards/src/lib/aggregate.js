@@ -7,11 +7,12 @@ const points = (s) => Number(s.estimate) || 0
 /* "PI 26.3", "26.3" and "PI_26.3" all mean the same PI. */
 export const piNumber = (v) => (String(v ?? '').match(/\d{2}\.\d/) || [null])[0]
 
-/* Feature Progress: one row per Feature Id. Owner, BV, Start, End and Status
-   come from the feature lookup columns on the story rows; Size is the
-   number of stories; PI % is done points over total points for stories
-   tagged with the feature's own PI; Total % is done over total for every
-   story under the feature. */
+/* Feature Progress: one row per Feature Id. Owner, BV, Start, End, Status
+   and Size (the feature's own estimate, Feature Total Points) come from the
+   feature lookup columns on the story rows; Program is the stories'
+   Customer Epic; PI % is done points over total points for stories tagged
+   with the feature's own PI; Total % is done over total for every story
+   under the feature. */
 export function featureRows(stories) {
   const byFeature = new Map()
   for (const s of stories) {
@@ -22,13 +23,16 @@ export function featureRows(stories) {
         key: id, summary: s.feature || '', owner: s.featureTeam, bv: s.bv,
         start: s.targetStart, end: s.targetEnd, status: s.featureStatus,
         pi: s.featurePi, release: s.featureFixVersion,
-        size: 0, total: 0, done: 0, piTotal: 0, piDone: 0,
+        size: s.featureTotalPoints ?? null, program: s.customerEpic ?? null,
+        count: 0, total: 0, done: 0, piTotal: 0, piDone: 0,
       }
       byFeature.set(id, f)
     }
     const est = points(s)
     const done = isDone(s.status) ? est : 0
-    f.size += 1
+    if (f.size == null && s.featureTotalPoints != null) f.size = s.featureTotalPoints
+    if (f.program == null && s.customerEpic) f.program = s.customerEpic
+    f.count += 1
     f.total += est
     f.done += done
     if (piNumber(s.programIncrement) === piNumber(s.featurePi)) {

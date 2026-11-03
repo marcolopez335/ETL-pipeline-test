@@ -13,6 +13,7 @@
      featureTeam -> Feature Team      featurePi -> Feature Pi
      featureFixVersion -> Feature Fix Version   featureStatus -> Feature Status
      bv -> Bv                         targetStart / targetEnd -> Target Start / Target End
+     customerEpic -> Customer Epic    featureTotalPoints / featureOpenPoints -> Feature Total Points / Feature Open Points
    firstSeen / doneOn are the two snapshot facts the burn-up needs: the first
    weekly Snapshot Date the story appears in, and the first one where its
    Status is Done or Accepted (null while open).
@@ -120,10 +121,18 @@ const ESTIMATES = [1, 2, 3, 5, 8, 13]
 const prevPi = (pi) => PI_OPTIONS[Math.max(0, PI_OPTIONS.indexOf(pi) - 1)]
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
 
+/* The Program filter: the Customer Epic at the top of each story's
+   hierarchy, here picked by the feature's Jira project. */
+const EPIC_BY_PROJECT = {
+  AC: 'Block 8.1 Mission Computer', AMMMSM: 'CR3.2 Mission Systems', CY: 'Cybersecurity Baseline',
+  USSOCOM: 'USSOCOM DT/OT', AMMMC5: 'C-5 Avionics',
+}
+
 const buildStories = () => {
   const rnd = mulberry32(20263)
   const out = []
   features.forEach((f, fi) => {
+    const mine = []
     const win = PI_WINDOWS[f.pi]
     const last = win.snapshots.length - 1
     const weekOf = (d, fallback) => {
@@ -135,6 +144,7 @@ const buildStories = () => {
     const endW = Math.max(startW, weekOf(f.end, last))
     const doneCount = Math.round((f.size * f.progress) / 100)
     const project = f.key.split('-')[0]
+    const customerEpic = EPIC_BY_PROJECT[project] || 'General'
     for (let i = 0; i < f.size; i += 1) {
       const estimate = ESTIMATES[Math.floor(rnd() * ESTIMATES.length)]
       const addedWeek = clamp(startW + Math.floor(rnd() * Math.max(1, (endW - startW) * 0.5)), 0, last)
@@ -142,7 +152,7 @@ const buildStories = () => {
       const doneWeek = isDone ? clamp(addedWeek + 1 + Math.floor(rnd() * Math.max(1, endW - addedWeek)), addedWeek, last) : null
       const spill = i < f.spill
       const otherTeam = i % 7 === 6 ? TEAMS[Math.floor(rnd() * TEAMS.length)] : null
-      out.push({
+      mine.push({
         storyNumber: `${project}-${90000 + fi * 100 + i}`,
         storyName: `${f.summary} - story ${i + 1}`,
         teamName: otherTeam || f.team || 'Unassigned',
@@ -152,6 +162,7 @@ const buildStories = () => {
         status: isDone ? 'Done' : (addedWeek < last ? 'In Progress' : 'To Do'),
         estimate,
         closedDate: doneWeek == null ? null : win.snapshots[doneWeek],
+        customerEpic,
         featureId: f.key,
         feature: f.summary,
         featureTeam: f.team,
@@ -165,6 +176,10 @@ const buildStories = () => {
         doneOn: doneWeek == null ? null : win.snapshots[doneWeek],
       })
     }
+    // The feature lookup's own estimate: the points of all its stories
+    const total = mine.reduce((a, s) => a + s.estimate, 0)
+    const open = mine.filter((s) => s.status !== 'Done').reduce((a, s) => a + s.estimate, 0)
+    for (const s of mine) out.push({ ...s, featureTotalPoints: total, featureOpenPoints: open })
   })
   return out
 }

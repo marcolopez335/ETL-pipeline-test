@@ -85,6 +85,26 @@
   white-space: nowrap;
 }
 .select select option { color: #0b0b0b; background: #fff; }
+.select .select-btn {
+  width: 100%;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text-1);
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: 10px;
+  padding: 7px 24px 7px 9px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select .select-btn:hover, .select .select-btn[aria-expanded="true"] { background: var(--glass-bg-strong); }
+.select .select-btn.active { border-color: var(--accent); background: var(--accent-soft); }
+.btn.primary { background: var(--accent-soft); border-color: var(--accent); }
+.popover .quick .count { margin-left: auto; color: var(--text-3); }
+.popover .muted { color: var(--text-3); padding: 4px 2px; }
 .select::after {
   content: "";
   position: absolute;

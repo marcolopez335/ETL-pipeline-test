@@ -586,6 +586,7 @@ def test_dashboard_export() -> None:
         "Feature Fix Version": ["CR3.2"] * 5, "Feature Status": ["In Progress"] * 5,
         "Bv": [7] * 5,
         "Target Start": [datetime(2026, 9, 1)] * 5, "Target End": [datetime(2026, 9, 30)] * 5,
+        "Customer Epic": ["Block 8.1 Mission Computer"] * 5, "Feature Total Points": [21.0] * 5,
         "Updated": [datetime(2026, 9, 21, 8, 30)] * 5,
     })
     run_at = datetime(2026, 9, 22, 10, 0)
@@ -601,6 +602,9 @@ def test_dashboard_export() -> None:
           data["pis"] == {"26.3": {"snapshots": ["2026-09-07", "2026-09-14", "2026-09-21"],
                                    "start": "2026-09-01", "end": "2026-09-28"}},
           detail=str(data["pis"]))
+    check("dashboard: Program (Customer Epic) and Size (Feature Total Points) exported",
+          by["S-1"]["customerEpic"] == "Block 8.1 Mission Computer" and by["S-1"]["featureTotalPoints"] == 21.0
+          and by["S-1"]["customerEpicId"] is None)
     check("dashboard: featurePi is the PI number, dates ISO, points numeric",
           by["S-2"]["featurePi"] == "26.3" and by["S-2"]["targetEnd"] == "2026-09-30"
           and by["S-2"]["estimate"] == 3.0 and data["extract"].startswith("9/21/2026 08:30:00 AM"),

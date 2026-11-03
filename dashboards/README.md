@@ -31,10 +31,24 @@ Same sections as production, top to bottom:
 | Sheet tabs | `TabStrip.jsx` | The production sheet names; only the first sheet is built out |
 
 All ten filters sit on one row with no scrolling (they wrap into rows only on
-narrow screens). Wired filters: **Select PI**, **Target Release**, **Owner**,
-**Contributor**, **BV**, **Sort By** and **Ideal Burnup** change the table, the
-tiles and the chart together, and so do the column header filters: the tiles
-and the burn-up are rebuilt from the stories of the features left in the table.
+narrow screens). **Select PI**, **Sort By**, **Predictability** and **Ideal
+Burnup** are single choices; **Target Release**, **Group**, **Program**,
+**Owner**, **Contributor** and **BV** are checkbox lists that take effect on
+Apply (Cancel, Escape or a click outside discards the staged choice). What
+each one filters on:
+
+| Filter | Field |
+|---|---|
+| Target Release | the feature's `Feature Fix Version` |
+| Group | the feature team's group from `src/data/groups.js` (five fixed groups; add the real team names there, unlisted teams count as General) |
+| Program | the story's `Customer Epic` |
+| Owner | the feature's `Feature Team` |
+| Contributor | the story's `Team Name` |
+| BV | the feature's `Bv` |
+
+Every filter, including the column header filters, changes the table, the
+tiles and the chart together: the tiles and the burn-up are rebuilt from the
+stories of the features left in the table.
 Group, Program, Contributor and Predictability are present for layout fidelity
 and do nothing yet.
 
@@ -62,7 +76,7 @@ joins on), and `src/lib/aggregate.js` turns them into the two views:
 
 | View | How it is aggregated from story rows |
 |---|---|
-| Feature Progress (PI) | one row per `Feature Id`; Owner, BV, Start, End, Status from `Feature Team`, `Bv`, `Target Start`, `Target End`, `Feature Status`; Size = story count; PI % = done points / total points for stories tagged with the feature's own PI; Total % = done points / total points over every story |
+| Feature Progress (PI) | one row per `Feature Id`; Owner, BV, Start, End, Status, Size from `Feature Team`, `Bv`, `Target Start`, `Target End`, `Feature Status`, `Feature Total Points`; PI % = done points / total points for stories tagged with the feature's own PI; Total % = done points / total points over every story |
 | Program Burnup (PI) | per weekly Snapshot Date: Scope = sum of `Estimate` over the stories present in that snapshot, Done = the same sum over stories whose Status is Done or Accepted, Ideal = straight line from the PI's first snapshot to the final scope |
 
 | Mock field | STORIES.hyper column |
@@ -74,6 +88,8 @@ joins on), and `src/lib/aggregate.js` turns them into the two views:
 | `featureId`, `feature` | `Feature Id`, `Feature` |
 | `featureTeam`, `featurePi`, `featureFixVersion`, `featureStatus` | `Feature Team`, `Feature Pi`, `Feature Fix Version`, `Feature Status` |
 | `bv`, `targetStart`, `targetEnd` | `Bv`, `Target Start`, `Target End` |
+| `customerEpic`, `customerEpicId` | `Customer Epic`, `Customer Epic Id` |
+| `featureTotalPoints`, `featureOpenPoints` | `Feature Total Points`, `Feature Open Points` |
 | `addedWeek`, `doneWeek` | stand-ins for the history snapshots: the first weekly `Snapshot Date` the story appears in, and the first one where it is Done |
 
 The sample stories are generated deterministically from a hand-written

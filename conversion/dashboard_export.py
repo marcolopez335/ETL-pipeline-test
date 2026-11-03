@@ -48,6 +48,10 @@ FIELDS = {
     "Bv": "bv",
     "Target Start": "targetStart",
     "Target End": "targetEnd",
+    "Customer Epic": "customerEpic",              # the Program filter
+    "Customer Epic Id": "customerEpicId",
+    "Feature Total Points": "featureTotalPoints",  # the Size column
+    "Feature Open Points": "featureOpenPoints",
 }
 
 
