@@ -115,3 +115,8 @@ something in the browser rewrites CSS variables (a dark-mode extension);
 both flat means the browser is not applying `backdrop-filter` or
 backgrounds; both fine means the dev server or build is the problem. The app
 also re-injects its tokens and logs a console warning if they are missing.
+
+If the page is blank, a render error is shown on screen with its stack;
+`http://localhost:5173/?data=sample` loads the page on the sample data to
+separate a data problem from a code problem, and the menu button in the
+header opens a diagnostics report.

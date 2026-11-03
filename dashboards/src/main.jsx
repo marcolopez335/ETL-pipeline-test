@@ -5,6 +5,7 @@ import './styles/tokens.css'
 import './styles/glass.css'
 import './styles/app.css'
 import App from './App.jsx'
+import ErrorBoundary from './components/ErrorBoundary.jsx'
 
 /* Every color on the page is a CSS variable from tokens.css. If they come up
    missing (a stylesheet that did not apply, an extension that rewrote the
@@ -21,6 +22,8 @@ if (!tokensPresent()) {
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 )

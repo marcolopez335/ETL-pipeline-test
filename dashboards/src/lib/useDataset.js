@@ -13,6 +13,12 @@ export function useDataset() {
 
   useEffect(() => {
     let alive = true
+    // ?data=sample skips the real file: the quickest way to tell a data
+    // problem from a code problem
+    if (new URLSearchParams(window.location.search).get('data') === 'sample') {
+      setState({ dataset: sampleDataset, status: 'sample' })
+      return undefined
+    }
     fetch(DATA_URL, { cache: 'no-store' })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
