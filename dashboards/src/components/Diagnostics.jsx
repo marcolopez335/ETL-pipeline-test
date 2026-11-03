@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 /* On-screen report behind the header's menu button: enough to tell, from a
    photo of the screen, whether the color tokens, stylesheets, chart and
    dataset loaded. */
-const collect = ({ status, dataset }) => {
+const collect = ({ status, dataset, pi }) => {
   const root = document.documentElement
   const cs = getComputedStyle(root)
   const sheets = [...document.styleSheets].map((s) => {
@@ -28,14 +28,32 @@ const collect = ({ status, dataset }) => {
     `chart svg: ${svg ? `${svg.getAttribute('width')}x${svg.getAttribute('height')}, ${svg.querySelectorAll('.series-line').length} lines, tick fill=${tick ? getComputedStyle(tick).fill : 'none'}` : 'not rendered'}`,
     `backdrop-filter supported: ${CSS.supports('backdrop-filter', 'blur(2px)')}, dark reader: ${root.getAttribute('data-darkreader-mode') || 'none'}, forced colors: ${matchMedia('(forced-colors: active)').matches}`,
     `dataset: ${status}, ${dataset.stories.length} stories, ${Object.keys(dataset.pis).length} PI(s)${dataset.generated ? `, generated ${dataset.generated}` : ''}`,
+    ...dataLines(dataset, pi),
   ]
 }
 
-export default function Diagnostics({ anchor, status, dataset, onClose }) {
-  const ref = useRef(null)
-  const [lines, setLines] = useState(() => collect({ status, dataset }))
+/* The selected PI's window and its stories, enough to see why a burn-up
+   or a KPI would come out empty with real data. */
+const dataLines = (dataset, pi) => {
+  const w = dataset.pis[pi]
+  const rows = dataset.stories.filter((s) => s.featurePi === pi)
+  const n = rows.length
+  const withEst = rows.filter((s) => Number(s.estimate) > 0).length
+  const seen = rows.map((s) => s.firstSeen).filter(Boolean).sort()
+  const done = rows.filter((s) => s.doneOn).length
+  const sample = rows[0] ? JSON.stringify(rows[0]).slice(0, 260) : 'none'
+  return [
+    `PI ${pi} window: ${w ? `${w.snapshots.length} snapshots ${w.snapshots[0]} .. ${w.snapshots[w.snapshots.length - 1]}, start ${w.start}, end ${w.end}` : 'MISSING'}`,
+    `PI ${pi} stories: ${n}; with estimate > 0: ${withEst}; with firstSeen: ${seen.length} (${seen[0] || '-'} .. ${seen[seen.length - 1] || '-'}); with doneOn: ${done}`,
+    `first story record: ${sample}`,
+  ]
+}
 
-  useEffect(() => { setLines(collect({ status, dataset })) }, [status, dataset])
+export default function Diagnostics({ anchor, status, dataset, pi, onClose }) {
+  const ref = useRef(null)
+  const [lines, setLines] = useState(() => collect({ status, dataset, pi }))
+
+  useEffect(() => { setLines(collect({ status, dataset, pi })) }, [status, dataset, pi])
   useEffect(() => {
     const onDown = (e) => { if (ref.current && !ref.current.contains(e.target) && !anchor.contains(e.target)) onClose() }
     const onKey = (e) => { if (e.key === 'Escape') onClose() }
@@ -51,7 +69,7 @@ export default function Diagnostics({ anchor, status, dataset, onClose }) {
       <div className="head">Diagnostics</div>
       <ol>{lines.map((l, i) => <li key={i}>{l}</li>)}</ol>
       <div className="foot">
-        <button type="button" className="btn small" onClick={() => setLines(collect({ status, dataset }))}>Refresh</button>
+        <button type="button" className="btn small" onClick={() => setLines(collect({ status, dataset, pi }))}>Refresh</button>
         <button type="button" className="btn small" onClick={onClose}>Close</button>
       </div>
     </div>,

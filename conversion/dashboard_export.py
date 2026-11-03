@@ -87,6 +87,8 @@ def _stamp(dt: datetime | None) -> str | None:
         return None
     text = dt.strftime("%m/%d/%Y %I:%M:%S %p").lstrip("0")
     tz = dt.astimezone().tzname() or ""
+    if " " in tz:  # Windows gives "Central Standard Time"; show CST
+        tz = "".join(word[0] for word in tz.split() if word[0].isupper())
     return f"{text} {tz}".strip()
 
 

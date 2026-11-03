@@ -2,7 +2,7 @@ import { useState } from 'react'
 import HeaderFilter from './HeaderFilter.jsx'
 import { COLUMNS } from '../lib/columns.js'
 import { anyActive, distinctValues, isActive } from '../lib/filters.js'
-import { fmtDate, fmtPct } from '../lib/format.js'
+import { fmtDate, fmtNum, fmtPct } from '../lib/format.js'
 
 /* Status wears a fixed status color plus an icon and the label, never color alone. */
 const STATUS = {
@@ -89,10 +89,10 @@ export default function FeatureTable({ rows, allRows, sort, onSort, pi, colFilte
                   </div>
                 </td>
                 <td className="owner">{r.owner || ''}</td>
-                <td className="num">{r.bv ?? ''}</td>
+                <td className="num">{fmtNum(r.bv)}</td>
                 <td>{fmtDate(r.start)}</td>
                 <td>{fmtDate(r.end)}</td>
-                <td className="num">{r.size ?? ''}</td>
+                <td className="num">{fmtNum(r.size)}</td>
                 <td><Pill status={r.status} /></td>
                 <td><Meter pct={r.piPct} kind="pi" /></td>
                 <td><Meter pct={r.totalPct} kind="total" /></td>

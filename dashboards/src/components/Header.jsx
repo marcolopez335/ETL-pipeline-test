@@ -29,7 +29,7 @@ export default function Header({ pi, stamps, status, dataset, theme, onToggleThe
           <span className="menu-lines" aria-hidden="true"><i /><i /><i /></span>
         </button>
       </div>
-      {diag && <Diagnostics anchor={diag} status={status} dataset={dataset} onClose={() => setDiag(null)} />}
+      {diag && <Diagnostics anchor={diag} status={status} dataset={dataset} pi={pi} onClose={() => setDiag(null)} />}
     </header>
   )
 }
