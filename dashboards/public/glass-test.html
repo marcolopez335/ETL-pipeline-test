@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="darkreader-lock" />
+  <title>Glass test</title>
+  <style>
+    :root {
+      --bg-1: #0b1220; --bg-2: #141f3d;
+      --glass-bg: rgba(255, 255, 255, 0.07); --glass-border: rgba(255, 255, 255, 0.14);
+      --text: #f0efec; --muted: #898781; --series: #3987e5; --blob: rgba(57, 135, 229, 0.55);
+    }
+    html { min-height: 100%; background: linear-gradient(160deg, var(--bg-1), var(--bg-2)); }
+    body { margin: 0; padding: 28px; font-family: system-ui, "Segoe UI", sans-serif; color: var(--text); line-height: 1.4; }
+    .blob { position: fixed; z-index: -1; width: 44vw; height: 44vw; left: -12vw; top: -12vw; border-radius: 50%; background: var(--blob); filter: blur(80px); }
+    section { max-width: 680px; margin: 0 0 16px; padding: 16px 20px; border-radius: 18px; }
+    .glass { background: var(--glass-bg); border: 1px solid var(--glass-border); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.22); -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%); }
+    .literal { background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.14); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%); }
+    h1 { font-size: 22px; margin: 0 0 6px; } h2 { font-size: 15px; margin: 0 0 10px; }
+    .bar { height: 10px; width: 60%; border-radius: 5px; background: var(--series); margin: 8px 0; }
+    .bar.lit { background: #3987e5; }
+    p.muted { color: var(--muted); font-size: 13px; }
+    pre { margin: 0; white-space: pre-wrap; font: 14px/1.5 Consolas, monospace; color: #ffffff; }
+  </style>
+</head>
+<body>
+  <div class="blob"></div>
+  <h1>Glass test</h1>
+  <p class="muted">Expected: a dark navy gradient, a soft blue glow at the top left, two frosted panels, a blue bar and a blue line in each panel, and gray labels.</p>
+
+  <section class="glass">
+    <h2>Panel A: colors from CSS variables</h2>
+    <div class="bar"></div>
+    <svg width="320" height="44" aria-hidden="true">
+      <text x="0" y="12" font-size="12" fill="var(--muted)">axis label via var()</text>
+      <line x1="0" y1="30" x2="320" y2="30" stroke="var(--series)" stroke-width="3" />
+    </svg>
+  </section>
+
+  <section class="literal">
+    <h2>Panel B: the same panel with literal colors</h2>
+    <div class="bar lit"></div>
+    <svg width="320" height="44" aria-hidden="true">
+      <text x="0" y="12" font-size="12" fill="#898781">axis label literal</text>
+      <line x1="0" y1="30" x2="320" y2="30" stroke="#3987e5" stroke-width="3" />
+    </svg>
+  </section>
+
+  <section class="literal">
+    <h2>Report</h2>
+    <pre id="report">running...</pre>
+  </section>
+
+  <script>
+    (function () {
+      var root = document.documentElement;
+      var cs = getComputedStyle(root);
+      var sheets = [];
+      for (var i = 0; i < document.styleSheets.length; i++) {
+        var s = document.styleSheets[i];
+        sheets.push((s.ownerNode && (s.ownerNode.className || s.ownerNode.id)) || s.href || 'page style');
+      }
+      var panelA = getComputedStyle(document.querySelector('.glass'));
+      var lines = [
+        '1. browser: ' + navigator.userAgent.replace(/^.*\) /, ''),
+        '2. backdrop-filter supported: ' + CSS.supports('backdrop-filter', 'blur(2px)'),
+        '3. --glass-bg resolves to: "' + cs.getPropertyValue('--glass-bg').trim() + '"',
+        '4. panel A background: ' + panelA.backgroundColor + ' | backdrop: ' + (panelA.backdropFilter || panelA.webkitBackdropFilter || 'none'),
+        '5. dark reader attribute: ' + (root.getAttribute('data-darkreader-mode') || 'none'),
+        '6. high contrast (forced colors): ' + matchMedia('(forced-colors: active)').matches,
+        '7. system prefers dark: ' + matchMedia('(prefers-color-scheme: dark)').matches,
+        '8. stylesheets on this page: ' + sheets.length + ' (' + sheets.join(', ') + ')',
+      ];
+      document.getElementById('report').textContent = lines.join('\n');
+    })();
+  </script>
+</body>
+</html>

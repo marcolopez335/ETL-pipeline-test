@@ -105,3 +105,13 @@ the table above, `featurePi` as the PI number, `firstSeen` / `doneOn` from
 the snapshot history, and a `pis` map of each PI's snapshot dates and
 start/end dates for the ideal line. Expect roughly a hundred bytes per
 story on the wire once the server gzips it.
+
+## If the page renders flat (no glass, no chart lines)
+
+Open `http://localhost:5173/glass-test.html` (or `/glass-test.html` on a
+hosted build). It draws one panel from CSS variables and one from literal
+colors and prints a numbered report. Panel A flat but Panel B fine means
+something in the browser rewrites CSS variables (a dark-mode extension);
+both flat means the browser is not applying `backdrop-filter` or
+backgrounds; both fine means the dev server or build is the problem. The app
+also re-injects its tokens and logs a console warning if they are missing.
