@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark light" />
+    <!-- The page has its own dark and light themes. Tell dark-mode browser
+         extensions (Dark Reader honours this tag) not to recolor it: when they
+         rewrite the CSS variables, every panel, meter and chart line vanishes. -->
+    <meta name="darkreader-lock" />
     <title>Program Metrics</title>
   </head>
   <body>
