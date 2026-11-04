@@ -736,12 +736,23 @@ def _open_tableau_session(tableau_session, env_cfg: dict):
     """
     import inspect
     params = inspect.signature(tableau_session).parameters
+
+    # Optional per-target TLS override. true/false, or a path to a CA bundle
+    # (requests accepts either). Omitted -> the library's default (verify).
+    # Prefer REQUESTS_CA_BUNDLE=<corporate CA .pem> over ssl_verify: false.
+    kwargs = {}
+    if "ssl_verify" in params and env_cfg.get("ssl_verify") is not None:
+        kwargs["ssl_verify"] = env_cfg["ssl_verify"]
+        if kwargs["ssl_verify"] is False:
+            logger.warning("Tableau TLS verification disabled for this target (ssl_verify: false)")
+
     if "target" in params:
-        return tableau_session(_tableau_target(env_cfg))
+        return tableau_session(_tableau_target(env_cfg), **kwargs)
     return tableau_session(
         server_key=env_cfg.get("server_key") or None,
         server_url=env_cfg["server_url"],
         site_id=env_cfg["site_id"],
+        **kwargs,
     )
 
 

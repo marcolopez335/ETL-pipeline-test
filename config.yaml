@@ -93,6 +93,10 @@ epics:
 # server_key optionally names an entry in csm_commonlib's TABLEAU_SERVER_LINKS
 # (and selects its stored credentials); leave "" to use server_url / site_id
 # directly. site_id "" means the Default site.
+# ssl_verify (optional): true (default), false, or a path to a CA bundle .pem.
+# If sign-in fails with CERTIFICATE_VERIFY_FAILED, prefer setting the
+# REQUESTS_CA_BUNDLE env var to the corporate CA bundle; use false only as a
+# last resort, since it disables TLS verification for that server.
 # Targets with an empty server_url are skipped with a warning.
 tableau:
   tst:
@@ -101,15 +105,18 @@ tableau:
     site_id: ""
     project_name: ""
     overwrite: true
+    ssl_verify: true
   prd:
     server_key: ""
     server_url: ""
     site_id: ""
     project_name: ""
     overwrite: true
+    ssl_verify: true
   external:
     server_key: ""
     server_url: ""
     site_id: ""
     project_name: ""
     overwrite: true
+    ssl_verify: true

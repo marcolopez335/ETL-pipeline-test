@@ -101,6 +101,7 @@ tableau:
     site_id: "your-site"
     project_name: "Your Project"
     overwrite: true
+    ssl_verify: true   # or false / path to a CA bundle; see config.yaml
   prd:
     server_url: "https://tableau.example.com"
     site_id: "your-site"
