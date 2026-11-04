@@ -1,50 +1,25 @@
-# Daily ETL run. Triggered by a pipeline schedule (CI/CD > Schedules) with a
-# cron such as "0 6 * * *"; can also be started by hand from the pipeline UI.
-# See README "Scheduled daily run on GitLab" for the CI variables to set.
-
-stages:
-  - etl
-
 variables:
   PYTHON_VERSION: "3.12"
-  # Image for the ETL job. Must contain the Tibco ODBC driver and unixODBC;
-  # override with a project/schedule CI variable pointing at your internal image.
-  ETL_IMAGE: "python:${PYTHON_VERSION}-slim"
-  # Host of the csm-commonlib repo referenced in requirements.txt. The job
-  # authenticates the clone with CI_JOB_TOKEN (see before_script).
-  CSM_COMMONLIB_HOST: "gitlab.us.lmco.com"
-  # Arguments for main.py on the scheduled run. Default exports hyper files only;
-  # set to "--publish" (tst + prd) or "--publish-tst" on the schedule to push to Tableau.
-  ETL_ARGS: ""
+  ETL_IMAGE: "python:${PYTHON_VERSION}-slim"   # override with an image that has the Tibco ODBC driver
+  CSM_COMMONLIB_HOST: "gitlab.us.lmco.com"     # host of the csm-commonlib repo in requirements.txt
+  ETL_ARGS: ""                                 # e.g. "--publish" or "--publish-tst"
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
 
-etl:daily:
-  stage: etl
+etl:
   image: $ETL_IMAGE
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_PIPELINE_SOURCE == "web"
-      when: manual
   timeout: 2h
   variables:
-    FORCE_SPINNER: "0"          # no TTY in CI; print plain status lines
+    FORCE_SPINNER: "0"
     PYTHONUNBUFFERED: "1"
   cache:
-    # The history caches (cache/*.parquet) are incremental: keep them between
-    # runs so each day only fetches recent history instead of the full query.
     - key: etl-history-cache
       paths:
         - cache/
-      policy: pull-push
     - key: pip-$PYTHON_VERSION
       paths:
         - .pip-cache/
   before_script:
-    - python --version
-    # pip needs git to install csm-commonlib from its repo; the slim image has none.
     - command -v git || (apt-get update -qq && apt-get install -y -qq --no-install-recommends git)
-    # Clone the internal repo with the job token instead of interactive credentials.
-    # The csm-commonlib project must allow this project in its CI/CD job token allowlist.
     - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CSM_COMMONLIB_HOST}/".insteadOf "https://${CSM_COMMONLIB_HOST}/"
     - pip install -r requirements.txt
   script:

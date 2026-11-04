@@ -55,23 +55,20 @@ pip install -r requirements.txt
 
 `requirements.txt` is intentionally unpinned: each listed package is imported by the pipeline and pip resolves the latest compatible release.
 
-### Scheduled daily run on GitLab
+### Running on GitLab
 
-`.gitlab-ci.yml` has an `etl:daily` job that runs `python main.py` once per day. It only runs from a pipeline schedule (or by hand from the web UI); ordinary pushes and merge requests start no pipeline.
+`.gitlab-ci.yml` has a single `etl` job: install `requirements.txt`, run `python main.py --test`, then `python main.py $ETL_ARGS`. It runs on every pipeline, so schedule it from CI/CD → Schedules with whatever cron you want.
 
-1. **Create the schedule**: CI/CD → Schedules → *New schedule*. Set the cron to the hour you want, e.g. `0 6 * * *` (every day at 06:00), pick the timezone and the `main` branch.
-2. **Set the CI variables** (Settings → CI/CD → Variables, or on the schedule itself):
+CI variables to set (Settings → CI/CD → Variables, or on the schedule):
 
-   | Variable | Purpose |
-   |----------|---------|
-   | `ETL_IMAGE` | Docker image with Python 3.12, unixODBC and the Tibco ODBC driver. The default `python:3.12-slim` has no ODBC driver, so an internal image is needed. |
-   | `CSM_COMMONLIB_HOST` | GitLab host of the `csm-commonlib` repo (defaults to `gitlab.us.lmco.com`). The job rewrites that host to use `CI_JOB_TOKEN`, so no credential variable is needed. |
-   | `ETL_ARGS` | Arguments for `main.py`. Empty exports hyper files only; `--publish` pushes to Tableau tst + prd, `--publish-tst` to tst only. |
+| Variable | Purpose |
+|----------|---------|
+| `ETL_IMAGE` | Image with Python 3.12, unixODBC and the Tibco ODBC driver. The default `python:3.12-slim` has no ODBC driver. |
+| `CSM_COMMONLIB_HOST` | GitLab host of the `csm-commonlib` repo (default `gitlab.us.lmco.com`). The job uses `CI_JOB_TOKEN` to clone it, so no credential variable is needed. |
+| `ETL_ARGS` | Arguments for `main.py`. Empty exports hyper files only; `--publish` pushes to Tableau tst + prd, `--publish-tst` to tst only. |
+| `REQUESTS_CA_BUNDLE` | Path to the corporate CA bundle if Tableau sign-in fails with `CERTIFICATE_VERIFY_FAILED`. |
 
-3. **Allow the job token**: in the `csm-commonlib` project go to Settings → CI/CD → Job token permissions and add this project to the allowlist, otherwise the `pip install` clone is refused.
-4. **Credentials**: the job runs non-interactively, so `use_stored_credentials` must resolve inside the image (the way `csm_commonlib` stores them for the service account). If the database prompts for a password, the job fails at the `--test` step.
-
-The job keeps `cache/` (the incremental history parquet files) between runs via the GitLab cache keyed `etl-history-cache`, and uploads `output/` and `logs/` as artifacts for two weeks. GitLab caches are best-effort; if one is lost the next run falls back to the full history query and reseeds the cache.
+The `csm-commonlib` project must list this project under Settings → CI/CD → Job token permissions, and stored database credentials must resolve non-interactively inside the image. The job keeps `cache/` between runs and uploads `output/` and `logs/` as artifacts for two weeks.
 
 ## Configuration
 
