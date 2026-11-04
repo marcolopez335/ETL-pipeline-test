@@ -708,6 +708,43 @@ def export_csv(df: pl.DataFrame, csv_path: Path) -> None:
     print_info(f"CSV: [dim]{csv_path.name}[/]")
 
 
+def _tableau_target(env_cfg: dict) -> str:
+    """Build the ``target`` for csm_commonlib >= 1.3 ``tableau_session``.
+
+    ``target`` is either a ``TABLEAU_SERVER_LINKS`` key (config ``server_key``)
+    or a full Tableau link. The site travels inside the link as the
+    ``/#/site/<site_id>`` segment; a link without one signs in to the Default
+    site. Empty strings in YAML count as "not set".
+    """
+    server_key = env_cfg.get("server_key") or None
+    if server_key:
+        return server_key
+    server_url = env_cfg["server_url"].rstrip("/")
+    site_id = env_cfg.get("site_id") or None
+    return f"{server_url}/#/site/{site_id}" if site_id else server_url
+
+
+def _open_tableau_session(tableau_session, env_cfg: dict):
+    """Call ``tableau_session`` with whichever signature the installed
+    csm_commonlib provides.
+
+    * >= 1.3: ``tableau_session(target, *, username=None, password=None, ...)``
+    * older:  ``tableau_session(*, server_key=None, server_url=None, site_id=None, ...)``
+
+    Either way credentials come from the library's credential store, so no
+    username/password lives in config.
+    """
+    import inspect
+    params = inspect.signature(tableau_session).parameters
+    if "target" in params:
+        return tableau_session(_tableau_target(env_cfg))
+    return tableau_session(
+        server_key=env_cfg.get("server_key") or None,
+        server_url=env_cfg["server_url"],
+        site_id=env_cfg["site_id"],
+    )
+
+
 def publish_hyper(hyper_path: Path, table_name: str, config: dict,
                    targets: list[str] = None, datasource_name: str = None) -> None:
     """Publish a hyper file to one or more Tableau servers.
@@ -724,7 +761,10 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict,
     try:
         from csm_commonlib.tableau.session import tableau_session
     except ImportError:
-        from csm_commonlib.tableau.publish import tableau_session
+        try:
+            from csm_commonlib.tableau.helpers import tableau_session
+        except ImportError:
+            from csm_commonlib.tableau.publish import tableau_session
 
     tab_cfg = config["tableau"]
 
@@ -745,17 +785,8 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict,
         logger.info(f"Publishing {hyper_path.name} to Tableau {label} ({env_cfg['server_url']})")
         print_info(f"Publishing [bold]{hyper_path.name}[/] to Tableau [cyan]{label}[/]")
 
-        # server_key (optional) selects stored credentials, mirroring the DB
-        # side's use_stored_credentials — so no username/password lives in
-        # config. Empty string in YAML is treated as "not set".
-        server_key = env_cfg.get("server_key") or None
-
         try:
-            with tableau_session(
-                server_key=server_key,
-                server_url=env_cfg["server_url"],
-                site_id=env_cfg["site_id"],
-            ) as server:
+            with _open_tableau_session(tableau_session, env_cfg) as server:
                 publish_hyper_to_tableau(
                     server=server,
                     project_name=env_cfg["project_name"],

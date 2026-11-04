@@ -90,8 +90,9 @@ epics:
 # --publish covers the internal servers (tst + prd); --publish-tst and
 # --publish-prd pick one. The external server publishes ONLY with
 # --publish-external — it is never included in --publish.
-# server_key optionally selects stored credentials (like the database side's
-# use_stored_credentials); leave "" to use server_url / site_id directly.
+# server_key optionally names an entry in csm_commonlib's TABLEAU_SERVER_LINKS
+# (and selects its stored credentials); leave "" to use server_url / site_id
+# directly. site_id "" means the Default site.
 # Targets with an empty server_url are skipped with a warning.
 tableau:
   tst:
