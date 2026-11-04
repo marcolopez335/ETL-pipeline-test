@@ -40,7 +40,7 @@ def join_stories_data(stories: pl.DataFrame, epics: pl.DataFrame) -> pl.DataFram
         on=["FEATURE_ID", "SNAPSHOT_DATE"],
         how="left",
         suffix="_epics",
-        join_nulls=True,
+        nulls_equal=True,  # renamed from join_nulls in polars 1.24; required by polars 2.x
     )
 
 

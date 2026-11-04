@@ -1,13 +1,15 @@
 # Runtime dependencies for the AMMM Jira ETL pipeline.
-# Pin to known-compatible major versions; tighten further in CI as needed.
+# Unpinned on purpose: pip resolves the latest compatible release of each.
+# Every package here is imported by the pipeline — see the note on each line.
 
-polars>=1.0,<2.0
-pyarrow>=15.0
-pantab>=5.0
-pyyaml>=6.0
-rich>=13.0
-pandas>=2.0           # Required by run_query (TibcoConnection.execute_query returns pandas)
+polars      # DataFrame engine (conversion/*, main.py, sql_shell)
+pyarrow     # polars <-> Arrow bridge; also needed by pl.from_pandas / df.to_arrow
+pantab      # writes Arrow tables to Tableau .hyper files (export_hyper)
+pandas      # TibcoConnection.execute_query returns pandas; converted via pl.from_pandas
+pyyaml      # config.yaml loader
+rich        # console output: spinners, progress, tables
 
 # Internal package — provides csm_commonlib.database.tibco, csm_commonlib.logging,
-# and csm_commonlib.tableau.publish. Install from the internal index/wheel.
-# csm_commonlib>=X.Y
+# csm_commonlib.tableau.publish and csm_commonlib.tableau.session.
+# Install from the internal index/wheel, e.g.:
+#   pip install csm_commonlib --extra-index-url <internal index>

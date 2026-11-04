@@ -1,10 +1,20 @@
 stages:
   - lint
   - test
+  - etl
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
   PYTHON_VERSION: "3.12"
+  # --- Scheduled ETL run (see README "Scheduled daily run on GitLab") ---
+  # Image for the ETL job. Must contain the Tibco ODBC driver and unixODBC;
+  # override with a project/schedule CI variable pointing at your internal image.
+  ETL_IMAGE: "python:${PYTHON_VERSION}-slim"
+  # csm_commonlib lives on an internal index: define PIP_EXTRA_INDEX_URL as a
+  # masked project CI variable (e.g. https://user:token@nexus.example.com/repository/pypi/simple).
+  # Arguments for main.py on the scheduled run. Default exports hyper files only;
+  # set to "--publish" (tst + prd) or "--publish-tst" on the schedule to push to Tableau.
+  ETL_ARGS: ""
 
 default:
   image: python:${PYTHON_VERSION}-slim
@@ -12,7 +22,15 @@ default:
     paths:
       - .pip-cache/
 
+# Lint and unit tests run on pushes and merge requests, not on the daily schedule.
+.not-on-schedule:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: on_success
+
 lint:
+  extends: .not-on-schedule
   stage: lint
   before_script:
     - pip install ruff
@@ -21,8 +39,46 @@ lint:
   allow_failure: false
 
 test:fill-snapshots:
+  extends: .not-on-schedule
   stage: test
   before_script:
     - pip install polars rich pyyaml
   script:
     - python test_fill_snapshots.py
+
+# Daily pipeline run. Triggered by a pipeline schedule (CI/CD > Schedules) with a
+# cron such as "0 6 * * *"; can also be started by hand from the pipeline UI.
+etl:daily:
+  stage: etl
+  image: $ETL_IMAGE
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+  timeout: 2h
+  variables:
+    FORCE_SPINNER: "0"          # no TTY in CI; print plain status lines
+    PYTHONUNBUFFERED: "1"
+  cache:
+    # The history caches (cache/*.parquet) are incremental: keep them between
+    # runs so each day only fetches recent history instead of the full query.
+    - key: etl-history-cache
+      paths:
+        - cache/
+      policy: pull-push
+    - key: pip-$PYTHON_VERSION
+      paths:
+        - .pip-cache/
+  before_script:
+    - python --version
+    - pip install -r requirements.txt
+    - pip install csm_commonlib
+  script:
+    - python main.py --test
+    - python main.py $ETL_ARGS
+  artifacts:
+    when: always
+    expire_in: 2 weeks
+    paths:
+      - output/
+      - logs/

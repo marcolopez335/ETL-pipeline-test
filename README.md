@@ -53,6 +53,25 @@ pip install -r requirements.txt
 
 > Requires the internal `csm_commonlib` package for database connectivity, logging, and Tableau publishing.
 
+`requirements.txt` is intentionally unpinned: each listed package is imported by the pipeline and pip resolves the latest compatible release.
+
+### Scheduled daily run on GitLab
+
+`.gitlab-ci.yml` has an `etl:daily` job that runs `python main.py` once per day. It only runs from a pipeline schedule (or by hand from the web UI); normal pushes and merge requests still run lint and tests only.
+
+1. **Create the schedule**: CI/CD → Schedules → *New schedule*. Set the cron to the hour you want, e.g. `0 6 * * *` (every day at 06:00), pick the timezone and the `main` branch.
+2. **Set the CI variables** (Settings → CI/CD → Variables, or on the schedule itself):
+
+   | Variable | Purpose |
+   |----------|---------|
+   | `ETL_IMAGE` | Docker image with Python 3.12, unixODBC and the Tibco ODBC driver. The default `python:3.12-slim` has no ODBC driver, so an internal image is needed. |
+   | `PIP_EXTRA_INDEX_URL` | Internal PyPI index that hosts `csm_commonlib` (masked). |
+   | `ETL_ARGS` | Arguments for `main.py`. Empty exports hyper files only; `--publish` pushes to Tableau tst + prd, `--publish-tst` to tst only. |
+
+3. **Credentials**: the job runs non-interactively, so `use_stored_credentials` must resolve inside the image (the way `csm_commonlib` stores them for the service account). If the database prompts for a password, the job fails at the `--test` step.
+
+The job keeps `cache/` (the incremental history parquet files) between runs via the GitLab cache keyed `etl-history-cache`, and uploads `output/` and `logs/` as artifacts for two weeks. GitLab caches are best-effort; if one is lost the next run falls back to the full history query and reseeds the cache.
+
 ## Configuration
 
 All settings are managed in `config.yaml`:
