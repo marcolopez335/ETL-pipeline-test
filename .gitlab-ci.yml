@@ -10,8 +10,9 @@ variables:
   # Image for the ETL job. Must contain the Tibco ODBC driver and unixODBC;
   # override with a project/schedule CI variable pointing at your internal image.
   ETL_IMAGE: "python:${PYTHON_VERSION}-slim"
-  # csm_commonlib lives on an internal index: define PIP_EXTRA_INDEX_URL as a
-  # masked project CI variable (e.g. https://user:token@nexus.example.com/repository/pypi/simple).
+  # Host of the csm-commonlib repo referenced in requirements.txt. The job
+  # authenticates the clone with CI_JOB_TOKEN (see before_script).
+  CSM_COMMONLIB_HOST: "gitlab.us.lmco.com"
   # Arguments for main.py on the scheduled run. Default exports hyper files only;
   # set to "--publish" (tst + prd) or "--publish-tst" on the schedule to push to Tableau.
   ETL_ARGS: ""
@@ -40,8 +41,12 @@ etl:daily:
         - .pip-cache/
   before_script:
     - python --version
+    # pip needs git to install csm-commonlib from its repo; the slim image has none.
+    - command -v git || (apt-get update -qq && apt-get install -y -qq --no-install-recommends git)
+    # Clone the internal repo with the job token instead of interactive credentials.
+    # The csm-commonlib project must allow this project in its CI/CD job token allowlist.
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CSM_COMMONLIB_HOST}/".insteadOf "https://${CSM_COMMONLIB_HOST}/"
     - pip install -r requirements.txt
-    - pip install csm_commonlib
   script:
     - python main.py --test
     - python main.py $ETL_ARGS

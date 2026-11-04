@@ -11,5 +11,5 @@ rich        # console output: spinners, progress, tables
 
 # Internal package — provides csm_commonlib.database.tibco, csm_commonlib.logging,
 # csm_commonlib.tableau.publish and csm_commonlib.tableau.session.
-# Install from the internal index/wheel, e.g.:
-#   pip install csm_commonlib --extra-index-url <internal index>
+# Installed straight from its GitLab repo; bump the tag after @ to upgrade.
+csm-commonlib @ git+https://gitlab.us.lmco.com/lm/adp/lmi/dee/development-tools/csm-commonlib.git@v1.3.0
