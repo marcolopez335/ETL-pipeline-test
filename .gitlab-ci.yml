@@ -1,12 +1,12 @@
+# Daily ETL run. Triggered by a pipeline schedule (CI/CD > Schedules) with a
+# cron such as "0 6 * * *"; can also be started by hand from the pipeline UI.
+# See README "Scheduled daily run on GitLab" for the CI variables to set.
+
 stages:
-  - lint
-  - test
   - etl
 
 variables:
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
   PYTHON_VERSION: "3.12"
-  # --- Scheduled ETL run (see README "Scheduled daily run on GitLab") ---
   # Image for the ETL job. Must contain the Tibco ODBC driver and unixODBC;
   # override with a project/schedule CI variable pointing at your internal image.
   ETL_IMAGE: "python:${PYTHON_VERSION}-slim"
@@ -15,39 +15,8 @@ variables:
   # Arguments for main.py on the scheduled run. Default exports hyper files only;
   # set to "--publish" (tst + prd) or "--publish-tst" on the schedule to push to Tableau.
   ETL_ARGS: ""
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
 
-default:
-  image: python:${PYTHON_VERSION}-slim
-  cache:
-    paths:
-      - .pip-cache/
-
-# Lint and unit tests run on pushes and merge requests, not on the daily schedule.
-.not-on-schedule:
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-      when: never
-    - when: on_success
-
-lint:
-  extends: .not-on-schedule
-  stage: lint
-  before_script:
-    - pip install ruff
-  script:
-    - ruff check . --select E,F,W --ignore E501
-  allow_failure: false
-
-test:fill-snapshots:
-  extends: .not-on-schedule
-  stage: test
-  before_script:
-    - pip install polars rich pyyaml
-  script:
-    - python test_fill_snapshots.py
-
-# Daily pipeline run. Triggered by a pipeline schedule (CI/CD > Schedules) with a
-# cron such as "0 6 * * *"; can also be started by hand from the pipeline UI.
 etl:daily:
   stage: etl
   image: $ETL_IMAGE

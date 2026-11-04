@@ -57,7 +57,7 @@ pip install -r requirements.txt
 
 ### Scheduled daily run on GitLab
 
-`.gitlab-ci.yml` has an `etl:daily` job that runs `python main.py` once per day. It only runs from a pipeline schedule (or by hand from the web UI); normal pushes and merge requests still run lint and tests only.
+`.gitlab-ci.yml` has an `etl:daily` job that runs `python main.py` once per day. It only runs from a pipeline schedule (or by hand from the web UI); ordinary pushes and merge requests start no pipeline.
 
 1. **Create the schedule**: CI/CD → Schedules → *New schedule*. Set the cron to the hour you want, e.g. `0 6 * * *` (every day at 06:00), pick the timezone and the `main` branch.
 2. **Set the CI variables** (Settings → CI/CD → Variables, or on the schedule itself):
