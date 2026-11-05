@@ -20,9 +20,16 @@ etl:
     # The JDBC fetch runs inside a JVM that JPype starts in-process. Its heap
     # defaults to 25% of container memory, which overflows on the full history
     # query (millions of rows). The JVM reads this variable at startup.
-    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75"
-    # One query at a time in CI (see load_config): fewer result sets on the heap.
-    ETL_PARALLEL_FETCH: "0"
+    # 50% leaves room for Python/Polars on an 8 GB runner; 75% starved the host.
+    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=50"
+    # Incremental history fetches are small, so parallel queries are fine once
+    # the cache is seeded. Set to "0" for one query at a time.
+    ETL_PARALLEL_FETCH: "1"
+    # Refuse to run without the history caches (seeded below or restored from
+    # the GitLab cache). The full-history bootstrap takes hours on a small
+    # runner; do it once from a workstation and upload the parquet files
+    # (README "Seeding the history cache"). Set to "0" to allow the bootstrap.
+    ETL_REQUIRE_CACHE: "1"
     # Stream results in chunks of this many rows (execute_query chunksize) so the
     # full history query never sits whole in Java or pandas.
     ETL_FETCH_CHUNKSIZE: "100000"
@@ -49,9 +56,18 @@ etl:
       for f in stories_history_cache.parquet epics_history_cache.parquet; do
         if [ ! -s "cache/$f" ]; then
           echo "cache/$f missing - trying seed from package registry"
-          curl -sSf --header "JOB-TOKEN: $CI_JOB_TOKEN" -o "cache/$f" "$CACHE_SEED_URL/$f"             && echo "seeded cache/$f ($(du -h cache/$f | cut -f1))"             || { rm -f "cache/$f"; echo "no seed for $f - full history query will run"; }
+          curl -sSf --header "JOB-TOKEN: $CI_JOB_TOKEN" -o "cache/$f" "$CACHE_SEED_URL/$f"             && echo "seeded cache/$f ($(du -h cache/$f | cut -f1))"             || { rm -f "cache/$f"; echo "no seed for $f"; }
         fi
       done
+      if [ "$ETL_REQUIRE_CACHE" = "1" ]; then
+        for f in stories_history_cache.parquet epics_history_cache.parquet; do
+          if [ ! -s "cache/$f" ]; then
+            echo "ERROR: cache/$f is missing and no seed is published. Upload it to the package registry"
+            echo "       (README: Seeding the history cache) or set ETL_REQUIRE_CACHE=0 to run the full history query."
+            exit 1
+          fi
+        done
+      fi
     # csm_commonlib talks to Tibco over JDBC (jaydebeapi/JPype), which needs a
     # JVM. The Python image has none, so install a headless JRE. apt goes out
     # through http_proxy/https_proxy set above.

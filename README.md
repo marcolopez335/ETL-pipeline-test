@@ -65,7 +65,7 @@ The job streams query results in chunks (`ETL_FETCH_CHUNKSIZE=100000`, using `ex
 
 The JDBC result sets live on the Java heap, so the job also sets `JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75` to let the JVM use most of the container's memory; the default 25% overflows on the full history query with "Java heap space". If it still overflows, give the runner more memory or set `database.parallel_fetch: false` in `config.yaml` so only one result set is in memory at a time.
 
-**Seeding the history cache.** A fresh runner has no `cache/`, so the first run executes the full history query (millions of rows), which can exhaust the JVM heap. Avoid it by uploading your local caches once to the project's generic package registry; the job downloads any cache file that is missing before running. From a machine with a working `cache/` folder, using a personal access token with `api` scope:
+**Seeding the history cache (required).** A fresh runner has no `cache/`, so the first run would execute the full history query: millions of rows through the JDBC bridge, which took over an hour and exhausted an 8 GB runner. The job therefore refuses to start without the caches (`ETL_REQUIRE_CACHE=1`) and instead downloads them from the package registry. Upload your local caches once to the project's generic package registry; the job downloads any cache file that is missing before running. From a machine with a working `cache/` folder, using a personal access token with `api` scope:
 
 ```bash
 PROJECT_ID=<project id from the GitLab project page>
@@ -75,7 +75,7 @@ for f in stories_history_cache.parquet epics_history_cache.parquet; do
 done
 ```
 
-After the first successful run the GitLab job cache takes over and the seed is only used again if that cache is lost. The job also sets `ETL_PARALLEL_FETCH=0` so queries run one at a time, and prints the container's memory limit at the top of the log.
+After the first successful run the GitLab job cache takes over and the seed is only used again if that cache is lost. With the cache present each daily run fetches only recent history and finishes in minutes, as it does on a workstation. Set `ETL_REQUIRE_CACHE=0` only if you really want CI to run the full bootstrap, and `ETL_PARALLEL_FETCH=0` to run queries one at a time.
 
 `csm-commonlib` is installed by pip cloning it from this GitLab. The job authenticates that clone with the job token and points git at the runner's `CI_SERVER_TLS_CA_FILE` so GitLab's certificate is trusted. Two prerequisites:
 
