@@ -63,6 +63,18 @@ pip install -r requirements.txt
 
 The JDBC result sets live on the Java heap, so the job sets `JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75` to let the JVM use most of the container's memory; the default 25% overflows on the full history query with "Java heap space". If it still overflows, give the runner more memory or set `database.parallel_fetch: false` in `config.yaml` so only one result set is in memory at a time.
 
+**Seeding the history cache.** A fresh runner has no `cache/`, so the first run executes the full history query (millions of rows), which can exhaust the JVM heap. Avoid it by uploading your local caches once to the project's generic package registry; the job downloads any cache file that is missing before running. From a machine with a working `cache/` folder, using a personal access token with `api` scope:
+
+```bash
+PROJECT_ID=<project id from the GitLab project page>
+for f in stories_history_cache.parquet epics_history_cache.parquet; do
+  curl --header "PRIVATE-TOKEN: <token>" --upload-file "cache/$f" \
+    "https://gitlab.us.lmco.com/api/v4/projects/$PROJECT_ID/packages/generic/history-cache/seed/$f"
+done
+```
+
+After the first successful run the GitLab job cache takes over and the seed is only used again if that cache is lost. The job also sets `ETL_PARALLEL_FETCH=0` so queries run one at a time, and prints the container's memory limit at the top of the log.
+
 `csm-commonlib` is installed by pip cloning it from this GitLab. The job authenticates that clone with the job token and points git at the runner's `CI_SERVER_TLS_CA_FILE` so GitLab's certificate is trusted. Two prerequisites:
 
 - the `csm-commonlib` project lists this project under Settings → CI/CD → Job token permissions;

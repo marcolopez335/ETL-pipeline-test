@@ -21,6 +21,12 @@ etl:
     # defaults to 25% of container memory, which overflows on the full history
     # query (millions of rows). The JVM reads this variable at startup.
     JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75"
+    # One query at a time in CI (see load_config): fewer result sets on the heap.
+    ETL_PARALLEL_FETCH: "0"
+    # History caches can be seeded from the project's generic package registry
+    # (package "history-cache", version "seed") so a fresh runner does not have
+    # to run the multi-million-row full history query. See README.
+    CACHE_SEED_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/history-cache/seed"
   cache:
     - key: etl-history-cache      # incremental history parquet, kept between runs
       paths:
@@ -29,6 +35,17 @@ etl:
       paths:
         - .pip-cache/
   before_script:
+    # Memory available to this job (the JVM heap is a percentage of it).
+    - echo "cgroup memory.max=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null)"; free -m || true
+    # Seed the history caches if the GitLab cache came back empty.
+    - mkdir -p cache
+    - |
+      for f in stories_history_cache.parquet epics_history_cache.parquet; do
+        if [ ! -s "cache/$f" ]; then
+          echo "cache/$f missing - trying seed from package registry"
+          curl -sSf --header "JOB-TOKEN: $CI_JOB_TOKEN" -o "cache/$f" "$CACHE_SEED_URL/$f"             && echo "seeded cache/$f ($(du -h cache/$f | cut -f1))"             || { rm -f "cache/$f"; echo "no seed for $f - full history query will run"; }
+        fi
+      done
     # csm_commonlib talks to Tibco over JDBC (jaydebeapi/JPype), which needs a
     # JVM. The Python image has none, so install a headless JRE. apt goes out
     # through http_proxy/https_proxy set above.

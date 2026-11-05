@@ -51,6 +51,13 @@ def load_config() -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
 
+    # ETL_PARALLEL_FETCH=0 (CI) forces one query at a time: each JDBC result
+    # set sits on the Java heap, and several at once overflow a small runner.
+    import os
+    env_parallel = os.environ.get("ETL_PARALLEL_FETCH")
+    if env_parallel is not None:
+        cfg.setdefault("database", {})["parallel_fetch"] = env_parallel.strip().lower() in ("1", "true", "yes")
+
     paths = cfg.get("paths") or {}
     global SQL_DIR, CACHE_DIR, BACKUP_DIR, OUTPUT_DIR, CSV_DIR
     if "sql_dir" in paths:
