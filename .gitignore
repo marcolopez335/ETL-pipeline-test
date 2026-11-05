@@ -30,3 +30,6 @@ Thumbs.db
 # Environment
 .env
 *.env
+
+# csm-commonlib checkout made by the CI build job
+vendor/

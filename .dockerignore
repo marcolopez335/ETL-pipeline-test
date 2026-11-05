@@ -1,0 +1,17 @@
+.git
+.gitlab-ci.yml
+.odbcenv
+.venv
+.dev
+venv
+__pycache__
+*.py[cod]
+cache
+output
+backups
+logs
+.pip-cache
+.vscode
+.idea
+.env
+*.env

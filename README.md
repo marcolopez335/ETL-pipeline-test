@@ -57,61 +57,21 @@ pip install -r requirements.txt
 
 ### Running on GitLab
 
-`.gitlab-ci.yml` has a single `etl` job: install `requirements.txt`, run `python main.py --test`, then `python main.py $ETL_ARGS`. It runs on every pipeline, so schedule it from CI/CD → Schedules with whatever cron you want.
+`.gitlab-ci.yml` follows the same shape as the FMM pipeline:
+
+1. **build-image** clones `csm-commonlib` (job token, tag `CSM_COMMONLIB_REF`) into `vendor/`, builds `Dockerfile` on a `docker-builder-large` runner and pushes it to this project's container registry as `ammm-jira-etl:<branch>`. The base image comes from the internal Harbor mirror and pip goes through the corporate proxy with Nexus as a trusted host.
+2. **daily_run** pulls that image and runs it. `entrypoint.sh` runs `python main.py --test`, then `python main.py $ETL_ARGS`. `cache/`, `output/`, `backups/` and `logs/` are bind-mounted from the job workspace, so the history cache persists through the GitLab cache and `output/` + `logs/` are uploaded as artifacts for two weeks.
+
+Both jobs run on every pipeline; schedule the daily run from CI/CD → Schedules.
 
 CI variables to set (Settings → CI/CD → Variables, or on the schedule):
 
 | Variable | Purpose |
 |----------|---------|
-| `ETL_IMAGE` | Image with Python 3.12, unixODBC and the Tibco ODBC driver. The default `python:3.12-slim` has no ODBC driver. |
-| `CSM_COMMONLIB_HOST` | GitLab host of the `csm-commonlib` repo (default `gitlab.us.lmco.com`). The job uses `CI_JOB_TOKEN` to clone it, so no credential variable is needed. |
 | `ETL_ARGS` | Arguments for `main.py`. Empty exports hyper files only; `--publish` pushes to Tableau tst + prd, `--publish-tst` to tst only. |
-| `CORP_CA_BUNDLE` | Variable of type **File** containing the corporate CA certificates (PEM). The job installs it into the image's trust store, so git, pip and the Tableau client all accept internal servers. Required with the default image, whose trust store rejects `gitlab.us.lmco.com` and `nexus.global.lmco.com` with "certificate signer not trusted". |
-| `TABLEAU_EXTERNAL_TOKEN` | Masked. Personal Access Token secret for a target with `token_name` set. |
+| `TABLEAU_EXTERNAL_TOKEN` | Masked. Personal Access Token secret for a target with `token_name` set. Passed into the container with `-e`. |
 
-The `csm-commonlib` project must list this project under Settings → CI/CD → Job token permissions, and stored database credentials must resolve non-interactively inside the image. The job keeps `cache/` between runs and uploads `output/` and `logs/` as artifacts for two weeks.
-
-## Configuration
-
-All settings are managed in `config.yaml`:
-
-```yaml
-database:
-  name: "default"
-  use_stored_credentials: true
-
-backup:
-  enabled: true
-  max_backups: 5
-
-cache:
-  backup_enabled: true
-  max_cache_backups: 3
-  min_retention_pct: 0.98
-
-snapshots:
-  day_of_week: 0        # 0=Monday, 1=Tuesday, ..., 6=Sunday
-  lookback_weeks: 4
-
-tableau:
-  tst:
-    server_url: "https://tableau-tst.example.com"
-    site_id: "your-site"
-    project_name: "Your Project"
-    overwrite: true
-    ssl_verify: true   # or false / path to a CA bundle; see config.yaml
-    token_name: ""     # set to sign in with a Personal Access Token (SSO servers)
-  prd:
-    server_url: "https://tableau.example.com"
-    site_id: "your-site"
-    project_name: "Your Project"
-    overwrite: true
-  external:            # published only with --publish-external
-    server_url: "https://tableau-external.example.com"
-    site_id: "your-site"
-    project_name: "Your Project"
-    overwrite: true
-```
+Still to copy from the FMM project: the Tibco ODBC driver install steps in `Dockerfile` (marked `--- ODBC ---`), and whichever `-e` variables its `docker run` passes for database credentials, since `csm_commonlib` must find them non-interactively inside the container. The `csm-commonlib` project must also list this project under Settings → CI/CD → Job token permissions.
 
 ### Tableau Personal Access Tokens
 
