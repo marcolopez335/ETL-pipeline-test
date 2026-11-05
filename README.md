@@ -61,6 +61,8 @@ pip install -r requirements.txt
 
 `csm_commonlib` connects to Tibco over JDBC via JPype, so the job first installs a headless JRE with apt and sets `JAVA_HOME`; without it `main.py --test` fails with "No JVM shared library file (libjvm.so) found".
 
+The JDBC result sets live on the Java heap, so the job sets `JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75` to let the JVM use most of the container's memory; the default 25% overflows on the full history query with "Java heap space". If it still overflows, give the runner more memory or set `database.parallel_fetch: false` in `config.yaml` so only one result set is in memory at a time.
+
 `csm-commonlib` is installed by pip cloning it from this GitLab. The job authenticates that clone with the job token and points git at the runner's `CI_SERVER_TLS_CA_FILE` so GitLab's certificate is trusted. Two prerequisites:
 
 - the `csm-commonlib` project lists this project under Settings → CI/CD → Job token permissions;

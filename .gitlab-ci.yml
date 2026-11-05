@@ -17,6 +17,10 @@ etl:
   variables:
     FORCE_SPINNER: "0"
     PYTHONUNBUFFERED: "1"
+    # The JDBC fetch runs inside a JVM that JPype starts in-process. Its heap
+    # defaults to 25% of container memory, which overflows on the full history
+    # query (millions of rows). The JVM reads this variable at startup.
+    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75"
   cache:
     - key: etl-history-cache      # incremental history parquet, kept between runs
       paths:
