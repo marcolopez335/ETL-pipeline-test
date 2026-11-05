@@ -99,6 +99,7 @@ tableau:
     project_name: "Your Project"
     overwrite: true
     ssl_verify: true   # or false / path to a CA bundle; see config.yaml
+    token_name: ""     # set to sign in with a Personal Access Token (SSO servers)
   prd:
     server_url: "https://tableau.example.com"
     site_id: "your-site"
@@ -110,6 +111,22 @@ tableau:
     project_name: "Your Project"
     overwrite: true
 ```
+
+### Tableau Personal Access Tokens
+
+Servers behind single sign-on reject username/password sign-ins through the REST API (Tableau error 401001) even when the same password works in the browser. For those targets sign in with a Personal Access Token instead:
+
+1. On that Tableau server open *My Account Settings → Personal Access Tokens*, create a token and copy its secret (shown once).
+2. In `config.yaml` set `token_name` on the target to the token's name.
+3. Export the secret as `TABLEAU_<TARGET>_TOKEN`, e.g. for the `external` target:
+
+   ```bash
+   export TABLEAU_EXTERNAL_TOKEN="<secret>"
+   ```
+
+   In GitLab add it as a masked CI variable with the same name. A different variable name can be given with `token_env`.
+
+Targets without `token_name` keep using the stored username/password through `csm_commonlib`.
 
 ## Usage
 

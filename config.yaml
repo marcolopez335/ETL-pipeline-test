@@ -97,6 +97,10 @@ epics:
 # If sign-in fails with CERTIFICATE_VERIFY_FAILED, prefer setting the
 # REQUESTS_CA_BUNDLE env var to the corporate CA bundle; use false only as a
 # last resort, since it disables TLS verification for that server.
+# token_name (optional): sign in with a Tableau Personal Access Token instead
+# of username/password — required for servers behind SSO/SAML. The secret is
+# read from the env var TABLEAU_<TARGET>_TOKEN (e.g. TABLEAU_EXTERNAL_TOKEN),
+# or from the variable named in token_env. Never put the secret in this file.
 # Targets with an empty server_url are skipped with a warning.
 tableau:
   tst:
@@ -106,6 +110,7 @@ tableau:
     project_name: ""
     overwrite: true
     ssl_verify: true
+    token_name: ""
   prd:
     server_key: ""
     server_url: ""
@@ -113,6 +118,7 @@ tableau:
     project_name: ""
     overwrite: true
     ssl_verify: true
+    token_name: ""
   external:
     server_key: ""
     server_url: ""
@@ -120,3 +126,4 @@ tableau:
     project_name: ""
     overwrite: true
     ssl_verify: true
+    token_name: ""

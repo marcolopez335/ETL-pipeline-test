@@ -1,5 +1,6 @@
 import shutil
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -724,9 +725,49 @@ def _tableau_target(env_cfg: dict) -> str:
     return f"{server_url}/#/site/{site_id}" if site_id else server_url
 
 
-def _open_tableau_session(tableau_session, env_cfg: dict):
-    """Call ``tableau_session`` with whichever signature the installed
-    csm_commonlib provides.
+@contextmanager
+def _pat_tableau_session(env_cfg: dict, target: str):
+    """Sign in to Tableau with a Personal Access Token (PAT).
+
+    Used when the target's config has ``token_name``. The token secret is read
+    from the environment variable named by ``token_env`` (default
+    ``TABLEAU_<TARGET>_TOKEN``) so it never lives in config.yaml. Needed for
+    servers behind SSO/SAML, which reject username/password REST sign-ins.
+    Yields a signed-in ``TSC.Server``, the same object csm_commonlib yields.
+    """
+    import os
+    import tableauserverclient as TSC
+
+    token_name = env_cfg["token_name"]
+    token_env = env_cfg.get("token_env") or f"TABLEAU_{target.upper()}_TOKEN"
+    secret = os.environ.get(token_env, "")
+    if not secret:
+        raise RuntimeError(
+            f"Tableau {target}: token_name is set but the environment variable "
+            f"{token_env} is empty. Create a PAT on the server (My Account Settings "
+            f"-> Personal Access Tokens) and export {token_env}=<secret>."
+        )
+
+    http_options = {}
+    if env_cfg.get("ssl_verify") is not None:
+        http_options["verify"] = env_cfg["ssl_verify"]
+        if env_cfg["ssl_verify"] is False:
+            logger.warning("Tableau TLS verification disabled for this target (ssl_verify: false)")
+
+    server = TSC.Server(env_cfg["server_url"], use_server_version=True,
+                        http_options=http_options or None)
+    auth = TSC.PersonalAccessTokenAuth(token_name, secret, site_id=env_cfg.get("site_id") or "")
+    logger.info(f"Tableau {target}: signing in with personal access token '{token_name}'")
+    with server.auth.sign_in(auth):
+        yield server
+
+
+def _open_tableau_session(tableau_session, env_cfg: dict, target: str = ""):
+    """Open a signed-in Tableau session for one config target.
+
+    With ``token_name`` set, signs in with a Personal Access Token via
+    tableauserverclient directly. Otherwise calls csm_commonlib's
+    ``tableau_session`` with whichever signature the installed version provides.
 
     * >= 1.3: ``tableau_session(target, *, username=None, password=None, ...)``
     * older:  ``tableau_session(*, server_key=None, server_url=None, site_id=None, ...)``
@@ -734,6 +775,9 @@ def _open_tableau_session(tableau_session, env_cfg: dict):
     Either way credentials come from the library's credential store, so no
     username/password lives in config.
     """
+    if env_cfg.get("token_name"):
+        return _pat_tableau_session(env_cfg, target)
+
     import inspect
     params = inspect.signature(tableau_session).parameters
 
@@ -797,7 +841,7 @@ def publish_hyper(hyper_path: Path, table_name: str, config: dict,
         print_info(f"Publishing [bold]{hyper_path.name}[/] to Tableau [cyan]{label}[/]")
 
         try:
-            with _open_tableau_session(tableau_session, env_cfg) as server:
+            with _open_tableau_session(tableau_session, env_cfg, target) as server:
                 publish_hyper_to_tableau(
                     server=server,
                     project_name=env_cfg["project_name"],

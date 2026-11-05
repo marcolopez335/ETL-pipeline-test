@@ -8,6 +8,7 @@ pantab      # writes Arrow tables to Tableau .hyper files (export_hyper)
 pandas      # TibcoConnection.execute_query returns pandas; converted via pl.from_pandas
 pyyaml      # config.yaml loader
 rich        # console output: spinners, progress, tables
+tableauserverclient   # PAT sign-in to Tableau (token_name targets); csm_commonlib uses it too
 
 # Internal package — provides csm_commonlib.database.tibco, csm_commonlib.logging,
 # csm_commonlib.tableau.publish and csm_commonlib.tableau.session.
