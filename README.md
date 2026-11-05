@@ -71,9 +71,11 @@ CI variables to set (Settings → CI/CD → Variables, or on the schedule):
 | Variable | Purpose |
 |----------|---------|
 | `ETL_ARGS` | Arguments for `main.py`. Empty exports hyper files only; `--publish` pushes to Tableau tst + prd, `--publish-tst` to tst only. |
+| `CSM_TIBCO_DATABASE_USERNAME` | Database user for the Tibco connection. `csm_commonlib` reads it from the environment when no credential store is available. |
+| `CSM_TIBCO_DATABASE_PASSWORD` | Masked. Password for that user. |
 | `TABLEAU_EXTERNAL_TOKEN` | Masked. Personal Access Token secret for a target with `token_name` set. |
 
-Still needed from the environment: the Tibco ODBC driver (the Harbor Python image does not ship one) and non-interactive database credentials for `csm_commonlib`, the same way the FMM job provides them.
+Without the two `CSM_TIBCO_DATABASE_*` variables the job stops at `main.py --test` with "Environment variables for service 'csm_tibco_database' are not set".
 
 ### Tableau Personal Access Tokens
 
