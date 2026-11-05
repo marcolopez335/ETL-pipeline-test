@@ -23,6 +23,12 @@ etl:
     JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75"
     # One query at a time in CI (see load_config): fewer result sets on the heap.
     ETL_PARALLEL_FETCH: "0"
+    # Stream results in chunks of this many rows (execute_query chunksize) so the
+    # full history query never sits whole in Java or pandas.
+    ETL_FETCH_CHUNKSIZE: "100000"
+    # csm_commonlib's JDBC query timeout (default 300 s) is too short for the
+    # full history query; 0 disables it.
+    CSM_TIBCO_QUERY_TIMEOUT_SECONDS: "0"
     # History caches can be seeded from the project's generic package registry
     # (package "history-cache", version "seed") so a fresh runner does not have
     # to run the multi-million-row full history query. See README.

@@ -124,6 +124,39 @@ def load_sql(filename: str) -> str:
     return sql_path.read_text(encoding="utf-8")
 
 
+def _fetch_chunksize(config: dict | None) -> int | None:
+    """Rows per chunk for execute_query, or None for a single fetch.
+
+    ``ETL_FETCH_CHUNKSIZE`` (env, used by CI) overrides ``database.fetch_chunksize``
+    in config.yaml. 0 or empty means unchunked.
+    """
+    import os
+    raw = os.environ.get("ETL_FETCH_CHUNKSIZE")
+    if raw is None:
+        raw = ((config or {}).get("database") or {}).get("fetch_chunksize")
+    try:
+        n = int(raw) if raw not in (None, "") else 0
+    except (TypeError, ValueError):
+        logger.warning(f"Ignoring invalid fetch_chunksize {raw!r}")
+        n = 0
+    return n if n > 0 else None
+
+
+def _normalize_dtypes(df: pl.DataFrame) -> pl.DataFrame:
+    """Normalize dtypes at the source:
+    - Null-typed columns (all-null from pandas) -> Utf8
+    - Datetime("ns") (pandas datetime64[ns]) -> Datetime("us"), matching
+      what Polars writes to parquet, so cache vs fresh never unit-clash
+    """
+    casts = []
+    for col, dtype in df.schema.items():
+        if dtype == pl.Null:
+            casts.append(pl.col(col).cast(pl.Utf8))
+        elif isinstance(dtype, pl.Datetime) and dtype.time_unit == "ns":
+            casts.append(pl.col(col).cast(pl.Datetime("us", dtype.time_zone)))
+    return df.with_columns(casts) if casts else df
+
+
 def run_query(
     sql_filename: str, database: str = "default", verbose: bool = True,
     config: dict | None = None,
@@ -134,23 +167,26 @@ def run_query(
     conn = TibcoConnection()
     conn.connect(database=database, use_stored_credentials=_use_stored_credentials(config))
 
+    chunksize = _fetch_chunksize(config)
     try:
-        pdf = conn.execute_query(query, verbose=verbose)
-        df = pl.from_pandas(pdf)
-        # Free the pandas copy immediately — it can be as large as the Polars one
-        del pdf
-        # Normalize dtypes at the source:
-        # - Null-typed columns (all-null from pandas) -> Utf8
-        # - Datetime("ns") (pandas datetime64[ns]) -> Datetime("us"), matching
-        #   what Polars writes to parquet, so cache vs fresh never unit-clash
-        casts = []
-        for col, dtype in df.schema.items():
-            if dtype == pl.Null:
-                casts.append(pl.col(col).cast(pl.Utf8))
-            elif isinstance(dtype, pl.Datetime) and dtype.time_unit == "ns":
-                casts.append(pl.col(col).cast(pl.Datetime("us", dtype.time_zone)))
-        if casts:
-            df = df.with_columns(casts)
+        if chunksize:
+            # Chunked fetch: each pandas chunk becomes Polars right away, so
+            # neither the JDBC result set nor pandas ever holds the whole
+            # table. vertical_relaxed upcasts a chunk whose column is all-null
+            # (Null) to the type the other chunks carry.
+            parts = []
+            for i, pdf in enumerate(conn.execute_query(query, verbose=verbose, chunksize=chunksize), 1):
+                parts.append(_normalize_dtypes(pl.from_pandas(pdf)))
+                del pdf
+                logger.info(f"{sql_filename}: chunk {i} ({parts[-1].height} rows)")
+            df = pl.concat(parts, how="vertical_relaxed") if parts else pl.DataFrame()
+            del parts
+        else:
+            pdf = conn.execute_query(query, verbose=verbose)
+            df = pl.from_pandas(pdf)
+            # Free the pandas copy immediately — it can be as large as the Polars one
+            del pdf
+        df = _normalize_dtypes(df)
         logger.info(f"Query returned {df.height} rows")
     except Exception as exc:
         logger.error(f"Failed to execute {sql_filename}: {exc}")

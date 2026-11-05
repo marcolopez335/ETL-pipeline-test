@@ -15,6 +15,9 @@ database:
   use_stored_credentials: true
   parallel_fetch: true        # run independent queries concurrently (set false if the DB limits sessions)
   max_parallel_queries: 4     # cap on concurrent ODBC connections during fetch
+  fetch_chunksize: 0          # rows per chunk from execute_query; 0 = one fetch.
+                              # CI sets ETL_FETCH_CHUNKSIZE so the multi-million-row
+                              # history query never sits whole on the Java heap.
 
 # Directories, relative to the project root. Logs always go to ./logs
 # (logging starts before this file is read).

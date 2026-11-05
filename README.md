@@ -61,7 +61,9 @@ pip install -r requirements.txt
 
 `csm_commonlib` connects to Tibco over JDBC via JPype, so the job first installs a headless JRE with apt and sets `JAVA_HOME`; without it `main.py --test` fails with "No JVM shared library file (libjvm.so) found".
 
-The JDBC result sets live on the Java heap, so the job sets `JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75` to let the JVM use most of the container's memory; the default 25% overflows on the full history query with "Java heap space". If it still overflows, give the runner more memory or set `database.parallel_fetch: false` in `config.yaml` so only one result set is in memory at a time.
+The job streams query results in chunks (`ETL_FETCH_CHUNKSIZE=100000`, using `execute_query(chunksize=...)` from `csm_commonlib`), converting each chunk to Polars as it arrives, so the full history query never sits whole on the Java heap or in pandas. Locally the same thing is `database.fetch_chunksize` in `config.yaml`. It also disables `csm_commonlib`'s 300 s JDBC query timeout (`CSM_TIBCO_QUERY_TIMEOUT_SECONDS=0`), which the full history query can exceed.
+
+The JDBC result sets live on the Java heap, so the job also sets `JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75` to let the JVM use most of the container's memory; the default 25% overflows on the full history query with "Java heap space". If it still overflows, give the runner more memory or set `database.parallel_fetch: false` in `config.yaml` so only one result set is in memory at a time.
 
 **Seeding the history cache.** A fresh runner has no `cache/`, so the first run executes the full history query (millions of rows), which can exhaust the JVM heap. Avoid it by uploading your local caches once to the project's generic package registry; the job downloads any cache file that is missing before running. From a machine with a working `cache/` folder, using a personal access token with `api` scope:
 
