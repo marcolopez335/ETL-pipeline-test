@@ -1,70 +1,40 @@
-# Same shape as the FMM pipeline: build the image once, then run it.
-stages:
-  - build
-  - run
+# One job: install the project and run it. Network settings mirror the FMM
+# pipeline (Harbor base image, corporate proxy, trusted Nexus host).
 
 variables:
-  PYTHON_BASE: "cdn.harbor.global.lmco.com/lmc.eo.swf.lmified/ext.hub.docker.com/library/python:3.12"
-  IMAGE_TAG: "${CI_REGISTRY_IMAGE}/ammm-jira-etl:${CI_COMMIT_REF_SLUG}"
+  PYTHON_IMAGE: "cdn.harbor.global.lmco.com/lmc.eo.swf.lmified/ext.hub.docker.com/library/python:3.12"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PIP_TRUSTED_HOST: "nexus.global.lmco.com"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
   http_proxy: "http://proxy-zsgov.external.lmco.com:80"
   https_proxy: "http://proxy-zsgov.external.lmco.com:80"
   no_proxy: ".lmco.com,localhost,127.0.0.1"
-  # csm-commonlib: repo path on this GitLab and the tag to build in (keep in
-  # step with the @tag in requirements.txt).
-  CSM_COMMONLIB_PROJECT: "lm/adp/lmi/dee/development-tools/csm-commonlib"
-  CSM_COMMONLIB_REF: "v1.3.0"
   ETL_ARGS: ""          # e.g. "--publish" or "--publish-tst"; set on the schedule
 
-build-image:
-  stage: build
-  tags:
-    - docker-builder-large
-  before_script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
-    # Clone the internal library here, where the runner already trusts GitLab,
-    # then COPY it into the image. The csm-commonlib project must allow this
-    # project under Settings > CI/CD > Job token permissions.
-    - rm -rf vendor && mkdir -p vendor
-    - git clone --depth 1 --branch "$CSM_COMMONLIB_REF" "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CSM_COMMONLIB_PROJECT}.git" vendor/csm-commonlib
-  script:
-    - |
-      docker build \
-        --build-arg PYTHON_BASE="$PYTHON_BASE" \
-        --build-arg http_proxy="$http_proxy" \
-        --build-arg https_proxy="$https_proxy" \
-        --build-arg no_proxy="$no_proxy" \
-        --build-arg PIP_TRUSTED_HOST="$PIP_TRUSTED_HOST" \
-        -t "$IMAGE_TAG" .
-    - docker push "$IMAGE_TAG"
-
-daily_run:
-  stage: run
-  tags:
-    - docker-builder-large
+etl:
+  image: $PYTHON_IMAGE
   timeout: 2h
+  variables:
+    FORCE_SPINNER: "0"
+    PYTHONUNBUFFERED: "1"
   cache:
-    # Incremental history parquet, kept between runs.
-    key: etl-history-cache
-    paths:
-      - cache/
+    - key: etl-history-cache      # incremental history parquet, kept between runs
+      paths:
+        - cache/
+    - key: pip-cache
+      paths:
+        - .pip-cache/
   before_script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
-    - docker pull "$IMAGE_TAG"
-    - mkdir -p cache output backups logs
+    # pip installs csm-commonlib by cloning it from this GitLab (see
+    # requirements.txt). Authenticate the clone with the job token, and make
+    # git trust GitLab's certificate using the CA file the runner already uses
+    # for its own checkout (set when the runner has tls-ca-file configured).
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "https://${CI_SERVER_HOST}/"
+    - if [ -n "${CI_SERVER_TLS_CA_FILE:-}" ]; then export GIT_SSL_CAINFO="$CI_SERVER_TLS_CA_FILE"; fi
+    - pip install -r requirements.txt
   script:
-    # cache/output/logs are bind-mounted so the GitLab cache and artifacts see them.
-    # Secrets (Tableau PAT, DB credentials) come in as -e from CI variables.
-    - |
-      docker run --rm \
-        -e http_proxy -e https_proxy -e no_proxy \
-        -e TABLEAU_EXTERNAL_TOKEN \
-        -v "$CI_PROJECT_DIR/cache:/app/cache" \
-        -v "$CI_PROJECT_DIR/output:/app/output" \
-        -v "$CI_PROJECT_DIR/backups:/app/backups" \
-        -v "$CI_PROJECT_DIR/logs:/app/logs" \
-        "$IMAGE_TAG" $ETL_ARGS
+    - python main.py --test
+    - python main.py $ETL_ARGS
   artifacts:
     when: always
     expire_in: 2 weeks

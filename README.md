@@ -57,21 +57,23 @@ pip install -r requirements.txt
 
 ### Running on GitLab
 
-`.gitlab-ci.yml` follows the same shape as the FMM pipeline:
+`.gitlab-ci.yml` is a single `etl` job, no image build. It uses the same network settings as the FMM pipeline: the Python 3.12 image from the internal Harbor mirror, the corporate proxy, and Nexus as pip's trusted host. It then does `pip install -r requirements.txt`, `python main.py --test`, and `python main.py $ETL_ARGS`.
 
-1. **build-image** clones `csm-commonlib` (job token, tag `CSM_COMMONLIB_REF`) into `vendor/`, builds `Dockerfile` on a `docker-builder-large` runner and pushes it to this project's container registry as `ammm-jira-etl:<branch>`. The base image comes from the internal Harbor mirror and pip goes through the corporate proxy with Nexus as a trusted host.
-2. **daily_run** pulls that image and runs it. `entrypoint.sh` runs `python main.py --test`, then `python main.py $ETL_ARGS`. `cache/`, `output/`, `backups/` and `logs/` are bind-mounted from the job workspace, so the history cache persists through the GitLab cache and `output/` + `logs/` are uploaded as artifacts for two weeks.
+`csm-commonlib` is installed by pip cloning it from this GitLab. The job authenticates that clone with the job token and points git at the runner's `CI_SERVER_TLS_CA_FILE` so GitLab's certificate is trusted. Two prerequisites:
 
-Both jobs run on every pipeline; schedule the daily run from CI/CD → Schedules.
+- the `csm-commonlib` project lists this project under Settings → CI/CD → Job token permissions;
+- the runner is configured with `tls-ca-file` (which is what makes its own checkout work). If `CI_SERVER_TLS_CA_FILE` is empty on your runner, ask the runner admins, or add a File-type CI variable with the corporate CA and set `GIT_SSL_CAINFO` to it.
+
+The job runs on every pipeline; schedule it from CI/CD → Schedules. The history cache in `cache/` persists through the GitLab cache and `output/` + `logs/` are uploaded as artifacts for two weeks.
 
 CI variables to set (Settings → CI/CD → Variables, or on the schedule):
 
 | Variable | Purpose |
 |----------|---------|
 | `ETL_ARGS` | Arguments for `main.py`. Empty exports hyper files only; `--publish` pushes to Tableau tst + prd, `--publish-tst` to tst only. |
-| `TABLEAU_EXTERNAL_TOKEN` | Masked. Personal Access Token secret for a target with `token_name` set. Passed into the container with `-e`. |
+| `TABLEAU_EXTERNAL_TOKEN` | Masked. Personal Access Token secret for a target with `token_name` set. |
 
-Still to copy from the FMM project: the Tibco ODBC driver install steps in `Dockerfile` (marked `--- ODBC ---`), and whichever `-e` variables its `docker run` passes for database credentials, since `csm_commonlib` must find them non-interactively inside the container. The `csm-commonlib` project must also list this project under Settings → CI/CD → Job token permissions.
+Still needed from the environment: the Tibco ODBC driver (the Harbor Python image does not ship one) and non-interactive database credentials for `csm_commonlib`, the same way the FMM job provides them.
 
 ### Tableau Personal Access Tokens
 
