@@ -59,6 +59,8 @@ pip install -r requirements.txt
 
 `.gitlab-ci.yml` is a single `etl` job, no image build. It uses the same network settings as the FMM pipeline: the Python 3.12 image from the internal Harbor mirror, the corporate proxy, and Nexus as pip's trusted host. It then does `pip install -r requirements.txt`, `python main.py --test`, and `python main.py $ETL_ARGS`.
 
+`csm_commonlib` connects to Tibco over JDBC via JPype, so the job first installs a headless JRE with apt and sets `JAVA_HOME`; without it `main.py --test` fails with "No JVM shared library file (libjvm.so) found".
+
 `csm-commonlib` is installed by pip cloning it from this GitLab. The job authenticates that clone with the job token and points git at the runner's `CI_SERVER_TLS_CA_FILE` so GitLab's certificate is trusted. Two prerequisites:
 
 - the `csm-commonlib` project lists this project under Settings → CI/CD → Job token permissions;

@@ -25,6 +25,12 @@ etl:
       paths:
         - .pip-cache/
   before_script:
+    # csm_commonlib talks to Tibco over JDBC (jaydebeapi/JPype), which needs a
+    # JVM. The Python image has none, so install a headless JRE. apt goes out
+    # through http_proxy/https_proxy set above.
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends default-jre-headless
+    - export JAVA_HOME=/usr/lib/jvm/default-java
+    - test -f "$JAVA_HOME/lib/server/libjvm.so" && echo "JVM OK ($JAVA_HOME)"
     # pip installs csm-commonlib by cloning it from this GitLab (see
     # requirements.txt). Authenticate the clone with the job token, and make
     # git trust GitLab's certificate using the CA file the runner already uses
