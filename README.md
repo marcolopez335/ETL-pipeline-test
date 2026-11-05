@@ -66,7 +66,8 @@ CI variables to set (Settings → CI/CD → Variables, or on the schedule):
 | `ETL_IMAGE` | Image with Python 3.12, unixODBC and the Tibco ODBC driver. The default `python:3.12-slim` has no ODBC driver. |
 | `CSM_COMMONLIB_HOST` | GitLab host of the `csm-commonlib` repo (default `gitlab.us.lmco.com`). The job uses `CI_JOB_TOKEN` to clone it, so no credential variable is needed. |
 | `ETL_ARGS` | Arguments for `main.py`. Empty exports hyper files only; `--publish` pushes to Tableau tst + prd, `--publish-tst` to tst only. |
-| `REQUESTS_CA_BUNDLE` | Path to the corporate CA bundle if Tableau sign-in fails with `CERTIFICATE_VERIFY_FAILED`. |
+| `CORP_CA_BUNDLE` | Variable of type **File** containing the corporate CA certificates (PEM). The job installs it into the image's trust store, so git, pip and the Tableau client all accept internal servers. Required with the default image, whose trust store rejects `gitlab.us.lmco.com` and `nexus.global.lmco.com` with "certificate signer not trusted". |
+| `TABLEAU_EXTERNAL_TOKEN` | Masked. Personal Access Token secret for a target with `token_name` set. |
 
 The `csm-commonlib` project must list this project under Settings → CI/CD → Job token permissions, and stored database credentials must resolve non-interactively inside the image. The job keeps `cache/` between runs and uploads `output/` and `logs/` as artifacts for two weeks.
 

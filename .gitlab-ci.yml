@@ -3,6 +3,9 @@ variables:
   ETL_IMAGE: "python:${PYTHON_VERSION}-slim"   # override with an image that has the Tibco ODBC driver
   CSM_COMMONLIB_HOST: "gitlab.us.lmco.com"     # host of the csm-commonlib repo in requirements.txt
   ETL_ARGS: ""                                 # e.g. "--publish" or "--publish-tst"
+  # CORP_CA_BUNDLE: define as a CI variable of type "File" holding the corporate
+  # root/intermediate CA certificates in PEM form. Needed when the image does not
+  # already trust gitlab.us.lmco.com / nexus.global.lmco.com / the Tableau servers.
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
 
 etl:
@@ -19,6 +22,14 @@ etl:
       paths:
         - .pip-cache/
   before_script:
+    # Trust the corporate CA for git, pip (certifi) and requests/Tableau.
+    - |
+      if [ -n "$CORP_CA_BUNDLE" ]; then
+        cp "$CORP_CA_BUNDLE" /usr/local/share/ca-certificates/corp-ca.crt
+        update-ca-certificates
+      fi
+    - export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+    - export REQUESTS_CA_BUNDLE=$SSL_CERT_FILE PIP_CERT=$SSL_CERT_FILE GIT_SSL_CAINFO=$SSL_CERT_FILE
     - command -v git || (apt-get update -qq && apt-get install -y -qq --no-install-recommends git)
     - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CSM_COMMONLIB_HOST}/".insteadOf "https://${CSM_COMMONLIB_HOST}/"
     - pip install -r requirements.txt
