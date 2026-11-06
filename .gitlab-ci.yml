@@ -25,6 +25,10 @@ etl:
     # process) plus Polars need the rest of an 8 GB runner. 75% starved the
     # host; 50% left too little for hyperd to start.
     JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=20"
+    # Hyper export on an 8 GB runner: cap the hyperd engine (default: 80% of
+    # the machine, which took the host down) and write in batches.
+    ETL_HYPER_MEMORY_LIMIT: "2g"
+    ETL_HYPER_BATCH_ROWS: "250000"
     # Incremental history fetches are small, so parallel queries are fine once
     # the cache is seeded. Set to "0" for one query at a time.
     ETL_PARALLEL_FETCH: "1"

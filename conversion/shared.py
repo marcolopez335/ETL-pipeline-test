@@ -734,9 +734,46 @@ def union_data(df_summary: pl.DataFrame, df_history: pl.DataFrame) -> pl.DataFra
     return unioned.unique()
 
 
+def _hyper_settings(config: dict) -> tuple[int, dict | None]:
+    """(rows per write batch, Hyper process params) for export_hyper.
+
+    ``ETL_HYPER_BATCH_ROWS`` / ``export.hyper_batch_rows``: write the table in
+    batches of this many rows (0 = one write). ``ETL_HYPER_MEMORY_LIMIT`` /
+    ``export.hyper_memory_limit`` (e.g. "2g"): cap for the hyperd process,
+    which otherwise assumes it may use 80% of the machine. Env wins over config.
+    """
+    import os
+    export_cfg = (config or {}).get("export") or {}
+    raw = os.environ.get("ETL_HYPER_BATCH_ROWS")
+    if raw is None:
+        raw = export_cfg.get("hyper_batch_rows")
+    try:
+        batch_rows = int(raw) if raw not in (None, "") else 0
+    except (TypeError, ValueError):
+        logger.warning(f"Ignoring invalid hyper_batch_rows {raw!r}")
+        batch_rows = 0
+    mem = os.environ.get("ETL_HYPER_MEMORY_LIMIT") or export_cfg.get("hyper_memory_limit")
+    params = {"memory_limit": str(mem)} if mem else None
+    return max(batch_rows, 0), params
+
+
+def _arrow_for_hyper(df: pl.DataFrame):
+    """Polars -> Arrow for pantab, with Null-typed columns cast to string
+    (pantab rejects the Arrow null type)."""
+    import pyarrow as pa
+    # Use Arrow directly — Polars -> Arrow is near zero-copy (both Arrow-backed),
+    # whereas .to_pandas() materializes numpy arrays and can trigger ArrayMemoryError
+    arrow_table = df.to_arrow()
+    for i, field in enumerate(arrow_table.schema):
+        if pa.types.is_null(field.type):
+            arrow_table = arrow_table.set_column(
+                i, field.name, arrow_table.column(i).cast(pa.string())
+            )
+    return arrow_table
+
+
 def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: dict) -> None:
     import pantab as pt
-    import pyarrow as pa
 
     hyper_path.parent.mkdir(parents=True, exist_ok=True)
     backup_file(hyper_path, config)
@@ -744,16 +781,31 @@ def export_hyper(df: pl.DataFrame, hyper_path: Path, table_name: str, config: di
     null_cols = [col for col in df.columns if df[col].dtype == pl.Null]
     if null_cols:
         df = df.with_columns([pl.col(c).cast(pl.Utf8) for c in null_cols])
-    # Use Arrow directly — Polars -> Arrow is near zero-copy (both Arrow-backed),
-    # whereas .to_pandas() materializes numpy arrays and can trigger ArrayMemoryError
-    arrow_table = df.to_arrow()
-    # Cast null-typed Arrow columns to string to avoid pantab "unsupported type: null"
-    for i, field in enumerate(arrow_table.schema):
-        if pa.types.is_null(field.type):
-            arrow_table = arrow_table.set_column(
-                i, field.name, arrow_table.column(i).cast(pa.string())
+
+    batch_rows, process_params = _hyper_settings(config)
+    # Write to a sibling temp file and move it into place at the end, so a
+    # failed write never leaves a half-written STORIES.hyper behind. pantab's
+    # own atomic mode would copy the whole file on every append, so it's off.
+    tmp_path = hyper_path.with_name(hyper_path.name + ".tmp")
+    tmp_path.unlink(missing_ok=True)
+    if batch_rows and df.height > batch_rows:
+        n_batches = -(-df.height // batch_rows)
+        logger.info(f"Writing {hyper_path.name} in {n_batches} batches of {batch_rows:,} rows")
+        for i, start in enumerate(range(0, df.height, batch_rows)):
+            part = _arrow_for_hyper(df.slice(start, batch_rows))
+            pt.frame_to_hyper(
+                part, database=tmp_path, table=table_name,
+                table_mode="w" if i == 0 else "a",
+                process_params=process_params, atomic=False,
             )
-    pt.frame_to_hyper(arrow_table, database=hyper_path, table_mode="w", table=table_name)
+            del part
+            logger.info(f"{hyper_path.name}: batch {i + 1}/{n_batches} written")
+    else:
+        pt.frame_to_hyper(
+            _arrow_for_hyper(df), database=tmp_path, table=table_name,
+            table_mode="w", process_params=process_params, atomic=False,
+        )
+    shutil.move(str(tmp_path), str(hyper_path))
     logger.info(f"Exported {df.height} rows to {hyper_path} (table: {table_name})")
 
 

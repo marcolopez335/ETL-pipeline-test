@@ -27,6 +27,14 @@ paths:
   output_dir: "output"
   backup_dir: "backups"
 
+# Hyper export tuning. hyper_batch_rows > 0 writes the table in batches of
+# that many rows; hyper_memory_limit (e.g. "2g") caps the hyperd process,
+# which by default assumes 80% of the machine. CI overrides both with
+# ETL_HYPER_BATCH_ROWS / ETL_HYPER_MEMORY_LIMIT; leave as-is on a workstation.
+export:
+  hyper_batch_rows: 0
+  hyper_memory_limit: ""
+
 # Timestamped copies of hyper outputs, kept before each overwrite.
 backup:
   enabled: true
