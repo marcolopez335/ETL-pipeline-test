@@ -180,5 +180,35 @@ def main() -> int:
     return 0
 
 
+def _exit(rc: int) -> None:
+    """Exit with ``rc`` even when a JVM is running.
+
+    Over JDBC, csm_commonlib starts a JVM in-process (JPype). At interpreter
+    shutdown JPype waits for the JVM's non-daemon threads, and the JDBC
+    driver can keep one alive for hours, so a finished run never returns to
+    CI. Flush the logs, then leave without the atexit machinery.
+    """
+    import logging
+    import os
+    import sys
+    sys.stdout.flush()
+    sys.stderr.flush()
+    logging.shutdown()
+    jpype = sys.modules.get("jpype")
+    if jpype is not None and jpype.isJVMStarted():
+        os._exit(rc)
+    sys.exit(rc)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        rc = main()
+    except SystemExit as exc:  # argparse --help / explicit exits
+        rc = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+    except KeyboardInterrupt:
+        rc = 130
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        rc = 1
+    _exit(rc)

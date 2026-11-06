@@ -7,7 +7,7 @@ from schemas.datatypes import EXPECTED_DTYPES_EPICS
 from conversion.shared import (
     OUTPUT_DIR, drop_todays_history, get_cache_path, get_logger, run_query, clean_dtypes, update_history,
     union_data, export_csv, export_hyper, get_csv_path, log_dataframe_summary,
-    publish_hyper, fill_missing_snapshots, history_fetch_plan, parallel_fetch,
+    publish_hyper, fill_missing_snapshots, history_fetch_plan, parallel_fetch, date_expr,
 )
 from conversion.console import (
     print_header, step_spinner, print_pipeline_complete,
@@ -166,8 +166,8 @@ def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str],
     lookup = (
         df.with_columns([
             pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_NAME_ALT_REGEX).alias("CURRENT_SPRINT"),
-            pl.col("BEGIN_DATE").cast(pl.Date, strict=False).alias("_begin"),
-            pl.col("END_DATE").cast(pl.Date, strict=False).alias("_end"),
+            date_expr(df, "BEGIN_DATE").alias("_begin"),
+            date_expr(df, "END_DATE").alias("_end"),
         ])
         .filter((reference >= pl.col("_begin")) & (reference <= pl.col("_end")))
         .select(partition_cols + ["CURRENT_SPRINT"]).unique()
@@ -227,7 +227,7 @@ def build_sprint_lookups(
     """
     # History: keyed by SNAPSHOT_DATE + PROGRAM_INCREMENT
     if "SNAPSHOT_DATE" in df_hist.columns:
-        df_hist = df_hist.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
+        df_hist = df_hist.with_columns(date_expr(df_hist, "SNAPSHOT_DATE"))
     df_hist = _sprints_in_their_own_pi(df_hist)
     df_sum = _sprints_in_their_own_pi(df_sum)
     history_lookup = _build_sprint_lookup(df_hist, SPRINT_PARTITION).join(
@@ -308,7 +308,7 @@ def fetch_agile(config: dict, history: bool = True) -> pl.DataFrame:
     df = run_query(cfg[sql_key], database=config["database"]["name"], config=config)
     # Cast SNAPSHOT_DATE to Date to match epic data (avoids type mismatch on join)
     if "SNAPSHOT_DATE" in df.columns:
-        df = df.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
+        df = df.with_columns(date_expr(df, "SNAPSHOT_DATE"))
     return df
 
 
@@ -531,7 +531,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
         sprint_history_lookup, sprint_summary_lookup = \
             build_sprint_lookups(fetched["sprint_range"], fetched["sprint_range_summary"])
         # Ensure SNAPSHOT_DATE is Date on both sides before joining
-        df_history = df_history.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
+        df_history = df_history.with_columns(date_expr(df_history, "SNAPSHOT_DATE"))
         # One agile row per feature (per snapshot): sum the per-PI rollup rows
         # so the join cannot fan a feature out, then join on FEATURE_KEY
         df_agile_history = collapse_agile(df_agile_history, df_history, has_snapshot=True)
@@ -551,7 +551,7 @@ def run(config: dict, publish: bool = False, publish_targets: list[str] = None,
     log_dataframe_summary(df_acrp, "Epics ACRP")
 
     df = df.with_columns(
-        pl.col("Snapshot Date").fill_null(pl.col("Last Updated").cast(pl.Date, strict=False))
+        pl.col("Snapshot Date").fill_null(date_expr(df, "Last Updated"))
     )
     log_dataframe_summary(df, "Epics Final")
 

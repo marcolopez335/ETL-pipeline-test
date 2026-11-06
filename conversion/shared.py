@@ -433,6 +433,23 @@ def _align_schemas(df1: pl.DataFrame, df2: pl.DataFrame) -> tuple[pl.DataFrame, 
     return df1, df2
 
 
+def date_expr(frame, col: str) -> pl.Expr:
+    """Expression turning ``col`` into ``pl.Date`` whatever it arrives as.
+
+    Over JDBC (CI) date columns reach us as String; locally over pyodbc they
+    are Datetime. Polars 2 removed the String -> Date cast, so strings are
+    parsed (format inferred, bad values -> null) before the cast.
+    """
+    schema = frame.collect_schema() if isinstance(frame, pl.LazyFrame) else frame.schema
+    dtype = schema.get(col)
+    expr = pl.col(col)
+    if dtype == pl.Utf8:
+        return expr.str.to_datetime(strict=False).cast(pl.Date)
+    if dtype == pl.Null:
+        return expr.cast(pl.Date)
+    return expr.cast(pl.Date, strict=False)
+
+
 def validate_history(df: pl.DataFrame, key_col: str) -> pl.DataFrame:
     """Check required history columns and normalize SNAPSHOT_DATE to Date."""
     required = {key_col, "SNAPSHOT_DATE"}
@@ -440,7 +457,7 @@ def validate_history(df: pl.DataFrame, key_col: str) -> pl.DataFrame:
     if missing:
         raise KeyError(f"Table missing columns: {missing}")
 
-    return df.with_columns(pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False))
+    return df.with_columns(date_expr(df, "SNAPSHOT_DATE"))
 
 
 def fetch_history(
@@ -502,11 +519,11 @@ def update_history_cache_with_recent(
     # Date avoids precision mismatches (us vs ns) between cache and fresh query
     # that silently break the anti-join dedup
     cached_lf = cached_lf.with_columns([
-        pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False),
+        date_expr(cached_lf, "SNAPSHOT_DATE"),
         pl.col(key_col).cast(pl.Utf8, strict=False),
     ])
     recent = recent.with_columns([
-        pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False),
+        date_expr(recent, "SNAPSHOT_DATE"),
         pl.col(key_col).cast(pl.Utf8, strict=False),
     ])
 
@@ -639,7 +656,7 @@ def fill_missing_snapshots(
     existing_dates = set()
     if "SNAPSHOT_DATE" in df_history.columns and df_history.height > 0:
         dates = df_history.select(
-            pl.col("SNAPSHOT_DATE").cast(pl.Date)
+            date_expr(df_history, "SNAPSHOT_DATE")
         ).unique().to_series().to_list()
         existing_dates = {d for d in dates if d is not None}
 
@@ -701,7 +718,7 @@ def drop_todays_history(df_history: pl.DataFrame) -> pl.DataFrame:
     today = datetime.now().date()
     before = df_history.height
     df_history = df_history.filter(
-        pl.col("SNAPSHOT_DATE").cast(pl.Date, strict=False).ne_missing(today)
+        date_expr(df_history, "SNAPSHOT_DATE").ne_missing(today)
     )
     dropped = before - df_history.height
     if dropped:
