@@ -31,3 +31,6 @@ Thumbs.db
 .env
 *.env
 
+
+# Hyper engine log written next to the hyper files
+hyperd.log

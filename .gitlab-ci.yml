@@ -20,8 +20,11 @@ etl:
     # The JDBC fetch runs inside a JVM that JPype starts in-process. Its heap
     # defaults to 25% of container memory, which overflows on the full history
     # query (millions of rows). The JVM reads this variable at startup.
-    # 50% leaves room for Python/Polars on an 8 GB runner; 75% starved the host.
-    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=50"
+    # Incremental fetches are small and chunked, so keep the JVM lean: it stays
+    # resident through the whole run, and the Hyper export (a separate hyperd
+    # process) plus Polars need the rest of an 8 GB runner. 75% starved the
+    # host; 50% left too little for hyperd to start.
+    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=20"
     # Incremental history fetches are small, so parallel queries are fine once
     # the cache is seeded. Set to "0" for one query at a time.
     ETL_PARALLEL_FETCH: "1"
@@ -84,9 +87,14 @@ etl:
   script:
     - python main.py --test
     - python main.py $ETL_ARGS
+  after_script:
+    # Diagnostics for a failed export: Hyper's own log and memory at the end.
+    - free -m || true
+    - '[ -f hyperd.log ] && { echo "--- hyperd.log (tail) ---"; tail -n 60 hyperd.log; } || true'
   artifacts:
     when: always
     expire_in: 2 weeks
     paths:
       - output/
       - logs/
+      - hyperd.log
