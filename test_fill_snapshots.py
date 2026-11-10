@@ -445,6 +445,26 @@ def test_sprint_lookup_guards() -> None:
     hist_lookup2, _ = build_sprint_lookups(hist_sprints, sprints)
     asof = hist_lookup2.filter(pl.col("PROGRAM_INCREMENT") == "PI 26.1")["CURRENT_SPRINT"].item()
     check("current sprint (history): as-of the snapshot date", asof == "26.1.1", detail=str(asof))
+    # Holes in the hand-entered dates: today falls between 26.4.1's END_DATE
+    # and 26.4.2's BEGIN_DATE -> the most recently started sprint, not blank.
+    # PI 26.5's only sprint has started and has no END_DATE yet -> that sprint.
+    # PI 26.6 ended yesterday and PI 26.7 starts tomorrow -> still blank.
+    gaps = pl.DataFrame({
+        "PROGRAM_INCREMENT": ["PI 26.4", "PI 26.4", "PI 26.5", "PI 26.6", "PI 26.7"],
+        "SPRINT_NAME": ["AMMM 26.4.1", "AMMM 26.4.2", "AMMM 26.5.1", "AMMM 26.6.1", "AMMM 26.7.1"],
+        "BEGIN_DATE": [now - 15 * day, now + 2 * day, now - 3 * day, now - 15 * day, now + 1 * day],
+        "END_DATE": [now - 1 * day, now + 16 * day, None, now - 1 * day, now + 15 * day],
+    })
+    _, gap_lookup = build_sprint_lookups(history, gaps)
+    gap_current = dict(gap_lookup.select(["PROGRAM_INCREMENT", "CURRENT_SPRINT"]).rows())
+    check("current sprint: a date in a gap between two sprints takes the last started sprint",
+          gap_current.get("PI 26.4") == "26.4.1", detail=str(gap_current))
+    check("current sprint: a started sprint with no END_DATE is current",
+          gap_current.get("PI 26.5") == "26.5.1", detail=str(gap_current))
+    check("current sprint: still null for a finished PI and a PI not started yet",
+          gap_current.get("PI 26.6") is None and gap_current.get("PI 26.7") is None,
+          detail=str(gap_current))
+    check("current sprint: one row per PI with gaps", gap_lookup.height == gaps["PROGRAM_INCREMENT"].n_unique())
     check("sprint names: Sprint Names reaches the epic row",
           out["Sprint Names"].item() == "AMMM 26.1.1, AMMM 26.1.2, AMMM 26.1.IP",
           detail=str(out["Sprint Names"].item()))

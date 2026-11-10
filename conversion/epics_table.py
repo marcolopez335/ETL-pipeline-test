@@ -151,8 +151,13 @@ def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str],
     Sprint dates are entered by hand and can overlap on a given day, so the
     result is collapsed to exactly one sprint per partition (the latest
     version wins). One value per PI, joined on the feature's own PI, so it
-    cannot fan a feature row out. Null when the PI isn't running on that
-    date (finished or future PI) or no sprint name parses.
+    cannot fan a feature row out.
+
+    The same hand-entered dates can also leave holes (one sprint ends
+    Friday, the next begins Monday; or a sprint has no END_DATE yet). A date
+    in such a hole takes the most recently started sprint of the PI instead
+    of showing nothing. Null when the PI isn't running on that date (not
+    started yet, or past its last END_DATE) or no sprint name parses.
     """
     needed = {"SPRINT_NAME", "BEGIN_DATE", "END_DATE"}
     if df.height == 0 or not needed <= set(df.columns):
@@ -163,27 +168,68 @@ def _build_current_sprint_lookup(df: pl.DataFrame, partition_cols: list[str],
                 empty = empty.with_columns(pl.Series(c, [], dtype=pl.Utf8))
         return empty.with_columns(pl.Series("CURRENT_SPRINT", [], dtype=pl.Utf8))
 
-    lookup = (
-        df.with_columns([
-            pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_NAME_ALT_REGEX).alias("CURRENT_SPRINT"),
-            date_expr(df, "BEGIN_DATE").alias("_begin"),
-            date_expr(df, "END_DATE").alias("_end"),
+    sprints = df.with_columns([
+        pl.col("SPRINT_NAME").cast(pl.Utf8).str.extract(SPRINT_NAME_ALT_REGEX).alias("CURRENT_SPRINT"),
+        date_expr(df, "BEGIN_DATE").alias("_begin"),
+        date_expr(df, "END_DATE").alias("_end"),
+        reference.alias("_ref"),
+    ])
+
+    # A sprint without a usable BEGIN_DATE can never be matched to a date
+    undated = sprints.filter(pl.col("SPRINT_NAME").is_not_null() & pl.col("_begin").is_null())
+    if undated.height:
+        examples = undated.select("SPRINT_NAME").unique().head(5).to_series().to_list()
+        logger.warning(
+            f"Current sprint: {undated.height} sprint row(s) have no usable BEGIN_DATE "
+            f"and cannot be the current sprint, e.g. {examples}"
+        )
+
+    # _rank 0: the sprint's dates contain the reference date.
+    # _rank 1: the sprint has started, but the date sits in a hole in the
+    #          hand-entered dates -- between this sprint's END_DATE and the next
+    #          sprint's BEGIN_DATE while the PI is still running, or the sprint
+    #          has no END_DATE yet. Without this the PI showed no sprint at all
+    #          on those days.
+    started = pl.col("_ref") >= pl.col("_begin")
+    contains = started & (pl.col("_ref") <= pl.col("_end"))
+    pi_still_running = pl.col("_ref") <= pl.col("_end").max().over(partition_cols)
+    in_gap = started & ~contains.fill_null(False) & (pl.col("_end").is_null() | pi_still_running)
+    ranked = (
+        sprints.with_columns(
+            pl.when(contains).then(pl.lit(0)).when(in_gap).then(pl.lit(1)).alias("_rank")
+        )
+        .filter(pl.col("_rank").is_not_null() & pl.col("CURRENT_SPRINT").is_not_null())
+        .with_columns([
+            _sprint_sort_key("CURRENT_SPRINT").alias("_key"),
+            # Overlapping sprints: latest version wins. Gap: latest started wins.
+            pl.when(pl.col("_rank") == 1).then(pl.col("_begin")).alias("_gap_begin"),
         ])
-        .filter((reference >= pl.col("_begin")) & (reference <= pl.col("_end")))
+    )
+    overlapping = (
+        ranked.filter(pl.col("_rank") == 0)
         .select(partition_cols + ["CURRENT_SPRINT"]).unique()
     )
-    candidates = lookup.height
+    # keep="last" after this sort = a containing sprint if there is one, else
+    # the most recently started sprint; ties broken by the latest version
     lookup = (
-        lookup.with_columns(_sprint_sort_key("CURRENT_SPRINT").alias("_key"))
-        .sort("_key", nulls_last=False)
+        ranked.sort(["_rank", "_gap_begin", "_key"], descending=[True, False, False], nulls_last=False)
         .unique(subset=partition_cols, keep="last", maintain_order=True)
-        .drop("_key")
     )
-    if lookup.height < candidates:
+    collapsed = overlapping.height - lookup.filter(pl.col("_rank") == 0).height
+    if collapsed:
         logger.info(
-            f"Current sprint: {candidates - lookup.height} overlapping sprint(s) "
+            f"Current sprint: {collapsed} overlapping sprint(s) "
             f"collapsed to the latest per partition"
         )
+    gap_filled = lookup.filter(pl.col("_rank") == 1)
+    if gap_filled.height:
+        examples = gap_filled.select(partition_cols + ["CURRENT_SPRINT"]).head(5).rows()
+        logger.info(
+            f"Current sprint: {gap_filled.height} partition(s) had no sprint whose dates "
+            f"contain the date (gap between sprints or missing END_DATE); used the most "
+            f"recently started sprint, e.g. {examples}"
+        )
+    lookup = lookup.select(partition_cols + ["CURRENT_SPRINT"])
     logger.info(f"Current sprint lookup ({partition_cols}): {lookup.height} rows")
     return lookup
 
